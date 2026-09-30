@@ -6,7 +6,7 @@ window.GAYA_CONFIG = {
   SUPABASE_URL: 'https://vzjtprwzolvzyvudeqnk.supabase.co',
   SUPABASE_ANON_KEY: 'sb_publishable_6fwIlURBNuS_vxMqt6B6PQ_5WhKdaXG',
   DRIVE_STORES: [
-    { no: 1, url: '' }
+    { no: 1, url: 'https://script.google.com/macros/s/AKfycbxDKn8LHriwkRiZJV9RdaXFRbK8guNnKMS9WWAhvofvsxzWFBuBtQkOaDr20xGJmBHLuw/exec' }
   ],
   APP_URL: 'https://gaya-elevator.github.io/',
   EMAIL_DOMAIN: 'gaya.local'
