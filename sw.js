@@ -3,7 +3,7 @@
    · 데이터(Supabase)와 자료 저장소(구글)는 저장하지 않는다 → 저장·조회는 항상 서버 기준
    · 화면(index.html)과 연결 설정(config.js)은 항상 인터넷에서 먼저 받는다 → 설정을 고치면 바로 반영
    · app.js / app.css 는 버전 번호(?v=)가 붙은 주소 그대로 저장한다 → 새 버전을 올리면 새로 받는다 */
-const VER = '38e908ee';
+const VER = '7d00c61d';
 const SHELL = 'gaya-shell-' + VER;
 const FONT = 'gaya-font';
 const FILES = ['./', 'index.html', 'app.css?v=' + VER, 'app.js?v=' + VER, 'config.js?v=' + VER, 'manifest.webmanifest', 'icon.svg', 'icon-192.png', 'icon-512.png', 'vendor/supabase.js', 'vendor/qrcode.js', 'vendor/jsQR.js'];
@@ -26,7 +26,14 @@ self.addEventListener('fetch', e => {
     return;
   }
   if (url.origin !== location.origin) return;
-  if (req.mode === 'navigate') { e.respondWith(networkFirst(req, 'index.html')); return; }
+  if (req.mode === 'navigate') {
+    // 앱 첫 화면(/ 또는 /index.html)만 저장한다 — 다른 주소의 화면이 앱 화면 자리에 저장되는 일을 막는다
+    const scope = new URL(self.registration.scope).pathname;
+    const isApp = url.pathname === scope || url.pathname === scope + 'index.html';
+    e.respondWith(fetch(req).then(r => { if (r.ok && isApp) { const c = r.clone(); caches.open(SHELL).then(x => x.put('index.html', c)); } return r; })
+      .catch(() => caches.match('index.html', { ignoreSearch: true })));
+    return;
+  }
   if (url.pathname.endsWith('/config.js')) { e.respondWith(networkFirst(req)); return; }
   e.respondWith(caches.match(req).then(hit => hit || fetch(req).then(r => { if (r.ok) { const c = r.clone(); caches.open(SHELL).then(x => x.put(req, c)); } return r; })));
 });

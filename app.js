@@ -30,9 +30,25 @@ const store = {
   del(k) { try { localStorage.removeItem(k); } catch {} }
 };
 const pad = n => String(n).padStart(2, '0');
+/* 서버 시각 문자열을 날짜로 — 아이폰 사파리는 "2026-10-01 03:00:00.123456+00" 같은 형식을 못 읽는다 */
+function toDate(v) {
+  if (v instanceof Date) return v;
+  if (typeof v !== 'string') return new Date(v);
+  let s = v.trim();
+  const m = s.match(/^(\d{4}-\d{2}-\d{2})[ T](\d{2}:\d{2}(?::\d{2})?)(\.\d+)?\s*(Z|[+-]\d{2}(?::?\d{2})?)?$/i);
+  if (m) {
+    const frac = m[3] ? (m[3] + '000').slice(0, 4) : '';
+    let tz = m[4] || 'Z';
+    if (/^[+-]\d{2}$/.test(tz)) tz += ':00';
+    else if (/^[+-]\d{4}$/.test(tz)) tz = tz.slice(0, 3) + ':' + tz.slice(3);
+    s = m[1] + 'T' + m[2] + frac + tz.toUpperCase();
+  }
+  const d = new Date(s);
+  return isNaN(d) ? new Date(v) : d;
+}
 function fmtWhen(iso) {
   if (!iso) return '';
-  const d = new Date(iso), now = new Date();
+  const d = toDate(iso), now = new Date();
   const diff = (now - d) / 1000;
   if (diff < 60) return '방금';
   if (diff < 3600) return Math.floor(diff / 60) + '분 전';
@@ -43,7 +59,7 @@ function fmtWhen(iso) {
   if (d.getFullYear() === now.getFullYear()) return (d.getMonth() + 1) + '월 ' + d.getDate() + '일 ' + hm;
   return d.getFullYear() + '. ' + (d.getMonth() + 1) + '. ' + d.getDate() + '.';
 }
-function fmtDate(iso) { const d = new Date(iso); return d.getFullYear() + '. ' + (d.getMonth() + 1) + '. ' + d.getDate() + '.'; }
+function fmtDate(iso) { const d = toDate(iso); return d.getFullYear() + '. ' + (d.getMonth() + 1) + '. ' + d.getDate() + '.'; }
 function fmtSize(b) {
   if (b == null) return '';
   if (b < 1024) return b + 'B';
@@ -148,7 +164,7 @@ function can(u, act, obj) {
     case 'stock': case 'upload': case 'mkdir': case 'comment': case 'memo': return true;
     case 'cancel':
       if (adm) return true;
-      return obj && obj.user_id === u.id && (Date.now() - new Date(obj.created_at)) < 7 * 864e5;
+      return obj && obj.user_id === u.id && (Date.now() - toDate(obj.created_at)) < 7 * 864e5;
     case 'delComment': return adm || (obj && obj.user_id === u.id);
     case 'setDev': return u.role === 'dev';
     default: return adm; // item, location, category, adjust, folderAdmin, docAdmin, users, audit, trash, status
@@ -1364,7 +1380,7 @@ VIEW['more.log'] = () => {
 };
 
 function lampState(st) {
-  const h = iso => iso ? (Date.now() - new Date(iso)) / 36e5 : 1e9;
+  const h = iso => iso ? (Date.now() - toDate(iso)) / 36e5 : 1e9;
   return [
     { k: '서버 깨우기 · 구글', at: st.last_ping, ok: h(st.last_ping) < 48, note: '매일 새벽 3시' },
     { k: '서버 깨우기 · GitHub', at: st.last_ping2, ok: h(st.last_ping2) < 48, note: '매일 오후 3시' },
