@@ -10,7 +10,7 @@ const CONFIG = Object.assign({
   STORAGE_WARN: 0.8
 }, window.GAYA_CONFIG || {});
 const DEMO = !CONFIG.SUPABASE_URL;
-const APP_VER = '039b4896';
+const APP_VER = '56ba3d21';
 
 /* ───────── 작은 도구들 ───────── */
 const $ = (s, r = document) => r.querySelector(s);
@@ -25,6 +25,8 @@ const opId = () => {
 };
 const clone = o => JSON.parse(JSON.stringify(o));
 const sleep = ms => new Promise(r => setTimeout(r, ms));
+// 인터넷이 끊겨 있으면 다시 연결될 때까지(최대 ms) 기다린다
+const waitOnline = ms => navigator.onLine !== false ? Promise.resolve() : new Promise(r => { const t = setTimeout(r, ms); window.addEventListener('online', () => { clearTimeout(t); r(); }, { once: true }); });
 const store = {
   get(k, d) { try { const v = localStorage.getItem(k); return v == null ? d : JSON.parse(v); } catch { return d; } },
   set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch {} },
@@ -385,7 +387,7 @@ function makeDemoAPI() {
       await tick(); const u = me();
       if ((D.pw[u.id] || '1234') !== oldPw) fail('지금 비밀번호가 맞지 않습니다.');
       if (!newPw || newPw.length < 6) fail('새 비밀번호는 6자 이상으로 정하세요.');
-      D.pw[u.id] = newPw; log('비밀번호 변경', 'account', u.id, u.name + ' 본인 비밀번호 변경'); save();
+      D.pw[u.id] = newPw; u.must_change_pw = false; log('비밀번호 변경', 'account', u.id, u.name + ' 본인 비밀번호 변경'); save();
     },
 
     /* 한 번에 받아 두는 기본 자료 (오프라인 조회용으로도 저장) */
@@ -790,7 +792,7 @@ function makeDemoAPI() {
       await tick(); const u = need('users'); const p = byId(D.profiles, id);
       if (p.role === 'dev' && !can(u, 'setDev')) fail('개발자 계정의 비밀번호는 개발자만 초기화할 수 있습니다.');
       const tmp = String(Math.floor(100000 + Math.random() * 900000));
-      D.pw[id] = tmp; log('비밀번호 초기화', 'account', id, p.name + ' (' + p.emp_no + ')'); save(); return tmp;
+      D.pw[id] = tmp; p.must_change_pw = id !== u.id; log('비밀번호 초기화', 'account', id, p.name + ' (' + p.emp_no + ')'); save(); return tmp;
     },
     async setActive(id, on) {
       await tick(); const u = need('users'); const p = byId(D.profiles, id);
@@ -1001,7 +1003,7 @@ function makeLiveAPI() {
   /* 구글 드라이브 창고 (앱스 스크립트 웹앱) */
   const stores = () => (CONFIG.DRIVE_STORES || []).filter(s => s.url);
   const storeUrl = no => { const s = stores(); const hit = s.find(x => x.no === no); return (hit || s[s.length - 1] || {}).url; };
-  const DRIVE_WAIT = { search: 15000, upload: 180000, uploadChunk: 180000, download: 120000 };
+  const DRIVE_WAIT = { search: 15000, upload: 180000, uploadChunk: 180000, uploadStatus: 30000, download: 120000 };
   async function drive(action, payload = {}, storeNo) {
     const url = storeUrl(storeNo); if (!url) throw new Error('자료 저장소가 아직 연결되지 않았습니다. 개발자에게 알려 주세요.');
     const { data: { session } } = await sb.auth.getSession();
@@ -1022,15 +1024,42 @@ function makeLiveAPI() {
       return { id: r.id, store: no };
     }
     const st = await drive('uploadStart', { path, name: file.name, mime: file.type || 'application/octet-stream', size: file.size }, no);
-    let res = null;
-    for (let start = 0; start < file.size; start += CH) {
+    // 8MB 씩 보낸다. 중간에 끊기면 구글이 어디까지 받았는지 물어 그 다음부터 이어 보낸다 (처음부터 다시 올리지 않음)
+    let res = null, start = 0, tries = 0;
+    const fatal = e => /시간이 지났습니다|다른 사람이 시작한|잘못된 올리기/.test(e && e.message || '');
+    while (start < file.size) {
       const end = Math.min(file.size, start + CH);
-      progress(`큰 파일 올리는 중 ${Math.round(end / file.size * 100)}% · ${file.name}`);
-      res = await drive('uploadChunk', { session: st.session, start, end, total: file.size, data: b64(await file.slice(start, end).arrayBuffer()) }, no);
+      progress(`큰 파일 올리는 중 ${Math.round(start / file.size * 100)}% · ${file.name}`);
+      try {
+        res = await drive('uploadChunk', { session: st.session, start, end, total: file.size, data: b64(await file.slice(start, end).arrayBuffer()) }, no);
+        tries = 0;
+        if (res.done) break;
+        start = res.next != null && res.next > start ? +res.next : end;
+      } catch (e) {
+        if (fatal(e) || ++tries > 5) { progress(null); throw e; }
+        progress(`연결이 불안정해 잠시 기다렸다 이어 올립니다 (${tries}/5) · ${file.name}`);
+        await waitOnline(60000); await sleep(tries * 3000);
+        try { const s = await drive('uploadStatus', { session: st.session, total: file.size }, no); if (s.done) { res = s; break; } start = +s.next || 0; }
+        catch (e2) { if (fatal(e2)) { progress(null); throw e2; } } // 상태도 못 물으면 같은 조각을 다시 보낸다
+      }
     }
     progress(null);
     if (!res || !res.id) throw new Error('큰 파일 올리기를 마치지 못했습니다.');
     return { id: res.id, store: no };
+  }
+  /* 파일은 올라갔는데 앱 등록(doc_add)이 끊긴 경우: 같은 요청 번호로 다시 등록한다. 계속 끊기면 이 폰에 적어 두고 연결되면 자동으로 마저 등록 */
+  const PENDUP = () => 'gaya-pendup-' + (me ? me.id : '');
+  const pendUps = () => { const l = store.get(PENDUP(), []); return Array.isArray(l) ? l.filter(x => Date.now() - (x.at || 0) < 2 * 864e5) : []; };
+  async function register(args, up) {
+    for (let i = 0; ; i++) {
+      try { return await rpc('doc_add', args); }
+      catch (e) {
+        if (e.dup || e.unsure) { if (await rpc('op_done', { p_op: args.p_op }).catch(() => false)) return null; }
+        if (!e.net && !e.unsure) { drive('discard', { id: up.id }, up.store).catch(() => {}); throw e; } // 서버가 거절(폴더가 지워짐 등) → 올린 파일은 치운다
+        if (i >= 2) { store.set(PENDUP(), [...pendUps(), { args, up, at: Date.now() }]); const x = new Error('파일은 저장소에 올라갔지만 연결이 끊겨 앱 목록에 아직 안 보입니다. 연결되면 자동으로 목록에 올라갑니다.'); x.net = true; x.later = true; throw x; }
+        await waitOnline(30000); await sleep(2000 * (i + 1));
+      }
+    }
   }
 
   return {
@@ -1072,6 +1101,8 @@ function makeLiveAPI() {
       if (p) me = p; return p || null;
     },
     async logout() { // 오프라인이어도 이 폰의 로그인은 반드시 지운다 (다음 사람이 앞사람 이름으로 저장하지 않게)
+      try { const reg = navigator.serviceWorker && await withTimeout(navigator.serviceWorker.getRegistration(), 2000); const sub = reg && reg.pushManager && await reg.pushManager.getSubscription(); // 이 폰으로 오던 앞사람 알림을 끊는다
+        if (sub) { await withTimeout(rpc('push_unsubscribe', { p_endpoint: sub.endpoint }), 4000).catch(() => {}); await sub.unsubscribe().catch(() => {}); } } catch {}
       me = null;
       try { await withTimeout(sb.auth.signOut({ scope: 'local' }), 4000); } catch {}
       try { Object.keys(localStorage).filter(k => k.startsWith('gaya-auth')).forEach(k => localStorage.removeItem(k)); } catch {}
@@ -1083,8 +1114,13 @@ function makeLiveAPI() {
       const chk = await sb.auth.signInWithPassword({ email: email(me.emp_no), password: oldPw });
       if (chk.error) throw new Error('지금 비밀번호가 맞지 않습니다.');
       const { error } = await sb.auth.updateUser({ password: newPw }); if (error) throw E(error);
-      await rpc('log_event', { p_action: '비밀번호 변경', p_summary: me.name + ' 본인 비밀번호 변경' });
+      await rpc('log_event', { p_action: '비밀번호 변경', p_summary: me.name + ' 본인 비밀번호 변경' }); // 서버의 「새 비밀번호를 정해야 함」 표시도 내린다
+      me.must_change_pw = false;
     },
+    /* 폰 알림 (웹 푸시) */
+    pushKey: () => rpc('push_key'),
+    pushSubscribe: (sub, ua) => { const j = sub.toJSON ? sub.toJSON() : sub; return rpc('push_subscribe', { p_endpoint: j.endpoint, p_p256dh: (j.keys || {}).p256dh, p_auth: (j.keys || {}).auth, p_ua: ua || '' }); },
+    pushUnsubscribe: endpoint => rpc('push_unsubscribe', { p_endpoint: endpoint }),
 
     async bootstrap() {
       const nd = x => x.is('deleted_at', null);
@@ -1146,8 +1182,22 @@ function makeLiveAPI() {
         target = await rpc('folder_ensure', { p_parent: folder_id, p_names: [y, m] }); path = [...path, y, m];
       }
       const up = await driveUpload(path, file);
-      const id = await rpc('doc_add', { p_folder: target, p_name: file.name, p_kind: 'file', p_mime: file.type || '', p_size: file.size, p_drive_id: up.id, p_store: up.store, p_url: null });
+      const id = await register({ p_folder: target, p_name: file.name, p_kind: 'file', p_mime: file.type || '', p_size: file.size, p_drive_id: up.id, p_store: up.store, p_url: null, p_op: opId() }, up);
       return { id, folder_id: target };
+    },
+    async flushUploads() { // 연결이 돌아오면: 앞서 등록을 마치지 못한 파일을 마저 등록한다
+      const list = pendUps(); if (!list.length) { store.del(PENDUP()); return 0; }
+      const left = []; let n = 0;
+      for (const x of list) {
+        try { await rpc('doc_add', x.args); n++; }
+        catch (e) {
+          if (e.net) left.push(x);
+          else if (e.dup || e.unsure) n++; // 이미 등록되어 있음
+          else drive('discard', { id: x.up.id }, x.up.store).catch(() => {});
+        }
+      }
+      if (left.length) store.set(PENDUP(), left); else store.del(PENDUP());
+      return n;
     },
     addLink: (folder_id, { name, url, op_id }) => rpc('doc_add', { p_folder: folder_id, p_name: name, p_kind: /youtu\.?be/.test(url || '') ? 'video' : 'link', p_mime: '', p_size: null, p_drive_id: null, p_store: null, p_url: url, p_op: op_id || null }),
     async renameDoc(id, name) { const d = S.ix.doc.get(id); await rpc('doc_rename', { p_id: id, p_name: name }); if (d && d.drive_id) drive('renameFile', { id: d.drive_id, name: String(name).trim() }, d.store_no).catch(e => console.warn(e)); },
@@ -1524,8 +1574,8 @@ async function refresh() {
     if (u === undefined) return; // 로그인 상태를 확인하지 못함(연결 문제 등) → 아무것도 바꾸지 않는다
     if (u === 'expired') { await doLogout(); toast('로그인이 풀렸습니다. 다시 로그인해 주세요. 담아 둔 자재와 실사하던 수량은 그대로 있습니다.', true); return; }
     if (u === null || u.status !== 'active') { await doLogout(); toast('계정 사용이 중지되었거나 승인이 취소되었습니다. 관리자에게 문의하세요.', true); return; }
-    if (u.role !== S.user.role || u.name !== S.user.name) { S.user = { ...S.user, ...u }; store.set('gaya-user', S.user); }
-    await loadCache(); S.serverDown = false; if (!S.busy) render(); onEnterRoute(); offPrune(); resolvePending();
+    if (u.role !== S.user.role || u.name !== S.user.name || !!u.must_change_pw !== !!S.user.must_change_pw) { S.user = { ...S.user, ...u }; store.set('gaya-user', S.user); }
+    await loadCache(); S.serverDown = false; if (!S.busy) render(); onEnterRoute(); offPrune(); resolvePending(); flushUps(); pushResync();
   } catch {} finally { refreshing = false; }
 }
 
@@ -1577,8 +1627,9 @@ function render() {
   try { if (fid && a.selectionStart != null) sel = [a.selectionStart, a.selectionEnd]; } catch {}
   const keep = {}; document.querySelectorAll('#app ' + KEEP_SEL.split(',').join(',#app ') + ',#overlay ' + KEEP_SEL.split(',').join(',#overlay ')).forEach(el => { if (!el.hasAttribute('data-nokeep')) keep[el.id] = el.value; });
   const sy = S.sheet ? ($('.sheet') || {}).scrollTop : null;
-  $('#app').innerHTML = S.user && S.user.status === 'active' && S.cache ? shell() : authView();
-  $('#overlay').innerHTML = S.sheet ? sheetView() : '';
+  const forced = !!(S.user && S.user.status === 'active' && S.user.must_change_pw); // 임시 비밀번호로 들어왔으면 새 비밀번호부터
+  $('#app').innerHTML = forced ? forcePwView() : S.user && S.user.status === 'active' && S.cache ? shell() : authView();
+  $('#overlay').innerHTML = S.sheet && !forced ? sheetView() : '';
   for (const id in keep) { const n = document.getElementById(id); if (n && n.value !== keep[id] && (n.tagName === 'INPUT' || n.tagName === 'TEXTAREA')) n.value = keep[id]; }
   drawToast();
   if (sy != null && $('.sheet')) $('.sheet').scrollTop = sy;
@@ -1588,9 +1639,26 @@ function render() {
 }
 
 /* ───────── 로그인 · 가입 ───────── */
+const authHero = (sub = '') => `<div class="auth-hero">${logo('logo', true)}<div class="co">(주)가야엘리베이터</div><h1>자재·자료 관리</h1><p>${sub || '사내 전용 · 자재 입출고와 기술 자료'}</p></div>`;
+/* 관리자가 비밀번호를 초기화한 뒤 임시 번호로 로그인하면: 새 비밀번호를 정해야 앱으로 들어간다 */
+function forcePwView() {
+  const err = S.authErr ? `<div class="notice crit" role="alert">${ic('warn')}<span>${esc(S.authErr)}</span></div>` : '';
+  const off = online() ? '' : `<div class="notice crit" role="alert">${ic('wifioff')}<span>인터넷에 연결되어 있지 않습니다. 연결된 뒤 바꾸세요.</span></div>`;
+  return `<div class="auth-wrap">${authHero('새 비밀번호를 정하면 바로 시작합니다')}<div class="auth">
+    <form class="card" data-submit="forcePw" autocomplete="off">
+      <h2>새 비밀번호 정하기</h2>
+      <p class="muted" style="margin:0">${esc(S.user.name)}님, 관리자가 비밀번호를 초기화했습니다. 받은 6자리 번호는 임시 번호라서, 앞으로 쓸 비밀번호를 지금 정해 주세요.</p>
+      ${S.pwJust ? '' : `<div class="field"><label for="fp-old">받은 임시 비밀번호 (6자리)</label><input id="fp-old" name="old" type="password" inputmode="numeric" autocomplete="current-password" required></div>`}
+      <div class="field"><label for="fp-new">새 비밀번호</label><input id="fp-new" name="nw" type="password" minlength="6" autocomplete="new-password" required><span class="hint">6자 이상 · 임시 번호와 다르게</span></div>
+      <div class="field"><label for="fp-new2">새 비밀번호 한 번 더</label><input id="fp-new2" name="nw2" type="password" autocomplete="new-password" required></div>
+      ${off}${err}
+      <button class="btn primary block big" ${S.busy ? 'disabled' : ''}>${S.busy ? '바꾸는 중…' : '바꾸고 시작하기'}</button>
+      <button type="button" class="btn ghost block" data-act="forceLogout">지금은 로그아웃</button>
+    </form></div></div>`;
+}
 function authView() {
   const u = S.user;
-  const hero = (sub = '') => `<div class="auth-hero">${logo('logo', true)}<div class="co">(주)가야엘리베이터</div><h1>자재·자료 관리</h1><p>${sub || '사내 전용 · 자재 입출고와 기술 자료'}</p></div>`;
+  const hero = authHero;
   if ((u && u.status === 'active') || S.booting) return `<div class="auth-wrap">${hero('불러오는 중…')}</div>`;
   if (u && u.status === 'pending') return `<div class="auth-wrap">${hero()}<div class="auth">
     <div class="card"><h2>가입 신청을 보냈습니다</h2>
@@ -2050,6 +2118,9 @@ VIEW['more.menu'] = () => {
       <div class="lrow"><span class="ic">${ic('textsize')}</span><div class="main"><span class="t">글자 크기</span><span class="s">「크게」는 글자와 버튼을 모두 키웁니다. 이 기기에만 저장됩니다.</span></div></div>
       <div class="themepick"><div class="seg block" role="group" aria-label="글자 크기">${[['md', '보통'], ['lg', '크게']].map(([v, l]) => `<button data-act="size" data-v="${v}" aria-pressed="${sizeNow() === v}" ${v === 'lg' ? 'style="font-size:16px"' : ''}>가 ${l}</button>`).join('')}</div></div></div></section>
     ${Object.keys(offList()).length ? `<section class="sec"><div class="sec-h"><h2>폰에 저장한 자료</h2><span class="aside">이 기기</span></div><div class="ledger"><div class="lrow"><span class="ic">${ic('phone')}</span><div class="main"><span class="t">${Object.keys(offList()).length}개 · ${fmtSize(offTotal())}</span><span class="s">☆ 로 「내 저장함」에 넣은 자료는 폰에 저장돼 전파가 없어도 열립니다</span></div><button class="btn sm" data-act="docsMode" data-m="mine">내 저장함</button><button class="btn sm ghost" data-act="offClear">모두 지우기</button></div></div></section>` : ''}
+    ${DEMO ? '' : (() => { const [ok, why] = pushState(); return `<section class="sec"><div class="sec-h"><h2>폰 알림</h2><span class="aside">이 기기 · ${esc(S.user.name)}</span></div><div class="ledger">
+      <label class="lrow" style="cursor:${ok ? 'pointer' : 'default'}"><span class="ic">${ic('bell')}</span><div class="main"><span class="t">폰 알림 받기</span><span class="s">${esc(why)}</span></div><input type="checkbox" class="switch" data-act="pushToggle" ${pushOn() ? 'checked' : ''} ${ok || pushOn() ? '' : 'disabled'} aria-label="폰 알림 받기"></label></div>
+      ${pushOn() ? `<p class="muted" style="font-size:12.5px;margin:0">알림을 누르면 앱이 열리며 그 화면으로 갑니다. 로그아웃하면 이 폰으로 오던 알림도 끊깁니다.</p>` : ''}</section>`; })()}
     <section class="sec"><div class="sec-h"><h2>알림 창 설정</h2><span class="aside">이 기기에만 저장</span></div><div class="ledger">
       ${[['done', 'check', '저장 완료 알림', '「출고했습니다」처럼 저장한 뒤 아래에 잠깐 뜨는 알림'], ['undo', 'undo', '되돌리기 버튼', '입고·출고·이동 직후 8초 동안 뜨는 「되돌리기」'], ['install', 'phone', '홈 화면 추가 안내', '자재 첫 화면 맨 위의 파란 상자']].map(([k, i, t, s]) => `<label class="lrow" style="cursor:pointer"><span class="ic">${ic(i)}</span><div class="main"><span class="t">${t}</span><span class="s">${s}</span></div><input type="checkbox" class="switch" data-act="pref" data-k="${k}" ${pref(k) ? 'checked' : ''} aria-label="${t}"></label>`).join('')}</div>
       <p class="muted" style="font-size:12.5px;margin:0">저장 실패·연결 끊김 같은 빨간 알림은 꺼도 항상 뜹니다.</p></section>
@@ -2097,7 +2168,8 @@ function lampState(st) {
   return [
     { k: '서버 깨우기 · 구글', at: st.last_ping, ok: h(st.last_ping) < 48, note: '매일 새벽 3시' },
     { k: '서버 깨우기 · GitHub', at: st.last_ping2, ok: h(st.last_ping2) < 48, note: '매일 오후 3시' },
-    { k: '자동 백업', at: st.last_backup, ok: h(st.last_backup) < 48, note: st.backup_file || '' }
+    { k: '자동 백업 · 구글', at: st.last_backup, ok: h(st.last_backup) < 48, note: st.backup_file || '매일 새벽 3시 · 엑셀' },
+    ...(st.last_backup2 ? [{ k: '자동 백업 · GitHub', at: st.last_backup2, ok: h(st.last_backup2) < 48, note: '매일 새벽 4시 · 두 번째 백업' }] : []) // 두 번째 백업을 켠 뒤에만 보인다
   ];
 }
 VIEW['more.status'] = () => {
@@ -2175,9 +2247,10 @@ VIEW['more.guide'] = () => {
   const adm = can(S.user, 'users');
   const body = `<article class="guide hero" style="gap:6px">
     <h3>자재 쓰는 법</h3><ol><li>가운데 <b>스캔</b>으로 선반 QR을 찍으면 그 선반의 자재가 열립니다. 쓸 자재 옆 <b>꺼내기</b>를 누르고 수량·현장만 맞추면 출고가 끝납니다.</li><li>자재 탭 검색창이나 위치별·분류별 목록으로 찾아 품목을 열고 <b>출고</b>를 눌러도 됩니다. 자주 쓰는 품목은 자재 첫 화면 「내가 자주 쓰는 품목」에 저절로 모입니다.</li><li>저장 직후 아래에 뜨는 <b>되돌리기</b>를 누르면 방금 기록이 취소됩니다.</li><li>꺼냈다가 안 쓰고 돌려놓으면 기록 옆의 <b>출고 취소 (안 씀)</b>를 누릅니다. 수량이 원래대로 돌아갑니다. 본인 기록은 7일 안에 취소할 수 있고, 그 뒤에는 관리자가 합니다.</li><li>새로 들어온 자재는 <b>입고</b>, 다른 캐비넷으로 옮길 때는 <b>이동</b>입니다.</li><li>지난 기록은 자재 첫 화면 위쪽 <b>입출고 기록</b>에서 달별로 보고, 현장 이름·품명·사람으로 찾을 수 있습니다.</li><li>여러 자재를 꺼낼 때는 품목마다 <b>담기</b>를 누르고, 아래 띠의 <b>한 번에 출고</b>에서 현장을 한 번만 적습니다.</li></ol>
-    <h3>전파가 약할 때</h3><ol><li>오프라인이어도 받아 둔 목록은 그대로 보입니다. 저장(입고·출고 등)은 연결된 뒤에 됩니다.</li><li>저장 중에 연결이 끊겨 <b>「저장됐는지 확인하지 못했습니다」</b>가 뜨면, 연결된 뒤 같은 버튼을 한 번 더 누르세요. 앱이 서버에 먼저 물어보고, 이미 저장됐으면 <b>두 번 저장하지 않습니다.</b></li><li>앞서 끊겼던 저장이 됐는지는 연결이 돌아오면 앱이 알려 줍니다.</li></ol>
+    <h3>전파가 약할 때</h3><ol><li>오프라인이어도 받아 둔 목록은 그대로 보입니다. 저장(입고·출고 등)은 연결된 뒤에 됩니다.</li><li>저장 중에 연결이 끊겨 <b>「저장됐는지 확인하지 못했습니다」</b>가 뜨면, 연결된 뒤 같은 버튼을 한 번 더 누르세요. 앱이 서버에 먼저 물어보고, 이미 저장됐으면 <b>두 번 저장하지 않습니다.</b></li><li>앞서 끊겼던 저장이 됐는지는 연결이 돌아오면 앱이 알려 줍니다.</li><li>큰 파일을 올리다 끊기면 앱이 잠시 기다렸다가 <b>끊긴 곳부터 이어서</b> 올립니다. 파일은 올라갔는데 목록에 오르기 전에 끊기면, 연결이 돌아올 때 저절로 목록에 올라갑니다.</li></ol>
+    <h3>폰 알림</h3><ol><li>더보기 › <b>폰 알림 받기</b>를 켜고 「허용」을 누르면, 앱을 닫아 두어도 ${adm ? '재고 부족 · 가입 신청 · 댓글' : '내 자재·자료에 달린 댓글'} 알림이 폰에 뜹니다. 알림을 누르면 그 화면이 열립니다.</li><li>아이폰은 <b>홈 화면에 추가한 앱 아이콘</b>으로 열었을 때만 켤 수 있습니다 (iOS 16.4 이상).</li><li>폰 설정에서 알림을 막았다면 폰 설정 › 알림(또는 브라우저 › 사이트 설정 › 알림)에서 허용한 뒤 다시 켜세요. 로그아웃하면 그 폰으로 오던 알림은 끊깁니다.</li></ol>
     <h3>자료 쓰는 법</h3><ol><li>자료 탭에서 폴더를 열고 <b>올리기</b>로 PDF·엑셀·사진을 그대로 올립니다.</li><li>검색창에 에러코드나 부품명을 치면 파일 안의 글자까지 찾아 줍니다.</li><li>교육 영상은 유튜브에 「일부 공개」로 올린 뒤 <b>영상·링크</b>로 주소만 등록합니다.</li><li>자주 보는 자료는 파일 화면 오른쪽 위 <b>☆</b>를 누르면 자료 탭의 <b>「내 저장함」</b>에 모이고 폰에도 저장됩니다. 전파가 없는 기계실·피트에서도 열리고, 내 폴더를 만들어 정리할 수 있습니다(이 휴대폰에만 저장).</li><li>지난 입출고는 자재 첫 화면 위쪽 바로가기 <b>「입출고 기록」</b>에서, 현장마다 쓴 자재는 <b>「현장별 이력」</b>에서 봅니다.</li></ol>
-    ${adm ? `<h3>가입 승인과 퇴사자</h3><ol><li>더보기 › 직원 관리에서 이름·사내번호를 확인하고 승인합니다.</li><li>비밀번호를 잊은 직원은 이름을 눌러 <b>비밀번호 초기화</b> → 화면에 뜬 임시 번호를 알려 주고, 로그인 뒤 본인이 바꾸게 합니다.</li><li>퇴사자는 지우지 않고 <b>사용 중지</b>합니다. 그 사람이 남긴 입출고 기록은 그대로 남습니다.</li></ol>
+    ${adm ? `<h3>가입 승인과 퇴사자</h3><ol><li>더보기 › 직원 관리에서 이름·사내번호를 확인하고 승인합니다.</li><li>비밀번호를 잊은 직원은 이름을 눌러 <b>비밀번호 초기화</b> → 화면에 뜬 임시 번호 6자리를 알려 줍니다. 직원이 그 번호로 로그인하면 <b>새 비밀번호를 정하는 화면</b>이 먼저 나오고, 정해야 앱으로 들어갑니다.</li><li>퇴사자는 지우지 않고 <b>사용 중지</b>합니다. 그 사람이 남긴 입출고 기록은 그대로 남습니다.</li></ol>
     <h3>처음 입력하는 순서</h3><ol><li>더보기 › 위치 관리 › <b>한 번에 만들기</b>: 구역 › 캐비넷·선반 번호 범위 › 칸을 고르면 QR 코드까지 한꺼번에 생기고, 바로 라벨 인쇄 화면으로 갑니다.</li><li>더보기 › <b>품목 대량 등록</b>: 「빈 양식 받기」로 받은 엑셀에 채워 붙여 넣습니다. 위치 코드와 수량을 적으면 입고 기록까지 함께 남습니다.</li><li>선반마다 실제 수량을 맞출 때는 그 선반 화면의 <b>실사</b>를 누르고 세어 적습니다. 다 적으면 「다음 선반」 → QR을 찍으면 바로 다음 실사 화면입니다. 적던 수량은 저장 전까지 이 폰에 남습니다.</li></ol>
     <h3>위치 추가와 QR 라벨</h3><ol><li>더보기 › 위치 관리에서 캐비넷·선반을 추가하고 짧은 코드(예: WH-S5)를 붙입니다. 코드에는 빈칸을 넣지 않습니다.</li><li>QR 라벨 만들기 → 인쇄 → 선반에 붙입니다. 앱의 <b>스캔</b> 탭으로 찍으면 그 선반 화면이 바로 열립니다. (안드로이드는 폰 기본 카메라로 찍어도 열립니다. 아이폰은 기본 카메라로 찍으면 사파리에서 열려 로그인을 따로 해야 하니 앱의 스캔 탭을 쓰세요.)</li></ol>
     <h3>빨간 불이 켜졌을 때 (시스템 상태)</h3><ol><li>직원들이 앱을 평소처럼 쓰고 있다면 급한 일은 아닙니다. 앱을 쓰는 것만으로도 서버는 깨어 있습니다.</li><li>회사용 구글 계정(gaya.elevator.app)에 로그인해 보안 경고나 계정 잠김 안내가 있는지 봅니다.</li><li>그래도 계속 빨간 불이면 개발자(재석)에게 연락합니다.</li><li>앱이 아예 열리지 않고 「서버가 쉬고 있습니다」라고 나오면: supabase.com 에 소유자 계정으로 로그인 → 가야엘리베이터 조직 › gaya-app 프로젝트 → <b>Resume project</b> 를 누르고 몇 분 기다립니다. 멈춘 뒤 1년 안이면 데이터는 그대로입니다.</li></ol>
@@ -2393,7 +2466,7 @@ function sheetView() {
       break;
     }
     case 'tempPw':
-      h = sheetHead('임시 비밀번호') + `<p style="margin:0">${esc(d.name)}님에게 아래 번호를 알려 주세요. 로그인한 뒤 더보기 › 내 정보에서 바로 바꾸도록 안내하세요.</p><div class="total" style="justify-content:center;border:0;padding:0"><span class="big mono" style="letter-spacing:.12em">${esc(d.pw)}</span></div><button class="btn block" data-act="copyPw" data-pw="${esc(d.pw)}">번호 복사</button><button class="btn primary block big" data-act="sheetClose">확인</button>`;
+      h = sheetHead('임시 비밀번호') + `<p style="margin:0">${esc(d.name)}님에게 아래 번호를 알려 주세요. 이 번호로 로그인하면 새 비밀번호를 정하는 화면이 먼저 나옵니다.</p><div class="total" style="justify-content:center;border:0;padding:0"><span class="big mono" style="letter-spacing:.12em">${esc(d.pw)}</span></div><button class="btn block" data-act="copyPw" data-pw="${esc(d.pw)}">번호 복사</button><button class="btn primary block big" data-act="sheetClose">확인</button>`;
       break;
     case 'cart': {
       const rows = cart(); const sq = (r, i) => d['cq_' + i] ?? String(r.qty);
@@ -2508,8 +2581,11 @@ ACT.sheetOk = () => {
         out.push({ item_id: r.id, location_id: loc, qty: +q }); }
       return run(() => A.stockInMany({ rows: out, note: d.note || '발주 입고', op_id: d.op_id }), null, { op: d.op_id, label: `한 번에 입고 ${out.length}가지`, kind: 'recv', extra: out.map(x => x.item_id) }).then(ids => {
         if (!ids) return; const done = new Set(out.map(x => x.item_id));
+        const removed = S.order.rows.filter(r => done.has(r.id)); // 되돌리면 발주 목록에 다시 넣는다
         S.order.rows = S.order.rows.filter(r => !done.has(r.id)); orderSave(); S.lastRecvLoc = out[out.length - 1].location_id; render();
-        undoable(`${out.length}가지 입고했습니다 · 발주 목록에서 뺐습니다`, ids);
+        undoable(`${out.length}가지 입고했습니다 · 발주 목록에서 뺐습니다`, ids, { extra: ' · 발주 목록에 다시 넣었습니다', after: () => {
+          if (!S.order) { const sv = store.get(orderKey(), null); S.order = { rows: sv && Array.isArray(sv.rows) ? sv.rows : [] }; }
+          const have = new Set(S.order.rows.map(r => r.id)); S.order.rows.push(...removed.filter(r => !have.has(r.id))); orderSave(); render(); } });
       });
     },
     myFolder: () => {
@@ -2685,7 +2761,7 @@ Object.assign(ACT, {
   login: async (ds, f) => {
     if (!online()) { S.authErr = '인터넷에 연결되어 있지 않습니다. 연결된 뒤 다시 누르세요.'; return render(); }
     S.busy = true; S.authErr = ''; render();
-    try { S.user = await S.api.login(f.emp.value, f.pw.value); S.busy = false; if (S.user.status === 'active') await afterLogin(); else render(); }
+    try { S.user = await S.api.login(f.emp.value, f.pw.value); S.busy = false; S.pwJust = S.user.must_change_pw ? f.pw.value : null; if (S.user.status === 'active') await afterLogin(); else render(); } // 임시 비밀번호는 새 비밀번호를 정할 때까지 화면 메모리에만 (저장하지 않음)
     catch (e) { S.busy = false; S.authErr = isNet(e) ? NET_MSG : e.message; render(); }
   },
   signup: async (ds, f) => {
@@ -2706,11 +2782,12 @@ Object.assign(ACT, {
 
 /* ───────── 편의 기능 (업데이트 4) ───────── */
 /* 입고·출고·이동 직후 잠깐 뜨는 「되돌리기」: 누르면 방금 기록을 취소해 수량을 원래대로 돌린다 */
-function undoable(msg, tid) {
+function undoable(msg, tid, { extra = '', after = null } = {}) {
   if (S.already) return; // 「이미 되어 있었습니다」 안내를 덮어쓰지 않는다
   if (!tid || tid === true || !pref('undo')) return toast(msg);
   const many = Array.isArray(tid);
-  toast(msg, false, { label: '되돌리기', fn: () => run(() => many ? S.api.stockCancelMany(tid, opId()) : S.api.stockCancel({ tx_id: tid, op_id: opId() }), many ? `되돌렸습니다 · ${tid.length}가지 수량이 원래대로 돌아갔습니다` : '되돌렸습니다 · 수량이 원래대로 돌아갔습니다') });
+  toast(msg, false, { label: '되돌리기', fn: () => run(() => many ? S.api.stockCancelMany(tid, opId()) : S.api.stockCancel({ tx_id: tid, op_id: opId() }), (many ? `되돌렸습니다 · ${tid.length}가지 수량이 원래대로 돌아갔습니다` : '되돌렸습니다 · 수량이 원래대로 돌아갔습니다') + extra)
+    .then(ok => { if (ok && after) after(); }) });
 }
 const siteNames = () => [...new Set((S.recentSites || []).map(x => parseSite(x).name).filter(Boolean))].slice(0, 40);
 function rememberSite(site) {
@@ -3148,7 +3225,8 @@ async function afterLogin({ keepNav = false } = {}) {
   S.recentSites = store.get('gaya-sites', S.recentSites || []); S.mySites = store.get('gaya-mysites', []);
   S.api.txList({ limit: 80 }).then(l => { S.recentSites = [...new Set([...l.map(t => t.site).filter(Boolean), ...S.recentSites])].slice(0, 40); store.set('gaya-sites', S.recentSites); }).catch(() => {});
   openDeep();
-  if (!store.get('gaya-tour', false) && !S.sheet) { store.set('gaya-tour', true); openSheet('tour', { step: 0 }); } // 이 기기에서 처음 로그인했을 때 한 번
+  if (!S.user.must_change_pw && !store.get('gaya-tour', false) && !S.sheet) { store.set('gaya-tour', true); openSheet('tour', { step: 0 }); } // 이 기기에서 처음 로그인했을 때 한 번
+  pushResync(); flushUps();
 }
 function findLoc(code) { code = String(code || '').trim().toUpperCase(); if (!code) return null; return (S.cache ? S.cache.locations : []).find(l => (l.code || '').toUpperCase() === code || l.id === code) || null; }
 /* QR 라벨 주소(?loc=코드)로 열린 경우: 시작할 때 주소에서 떼어 두었다가 화면이 준비되면 그 위치를 연다 */
@@ -3156,10 +3234,22 @@ function takeDeepCode() {
   let code = null; try { code = new URLSearchParams(location.search).get('loc'); } catch {}
   return code;
 }
+/* 폰 알림을 눌러 열린 경우(?go={알림이 가리키는 화면}) */
+function takeDeepGo() {
+  try { const g = new URLSearchParams(location.search).get('go'); if (g) { const o = JSON.parse(g); if (o && typeof o === 'object') return o; } } catch {}
+  return null;
+}
 function openDeep() {
-  if (!S.deepCode || !S.cache || !S.user) return;
+  if (!S.cache || !S.user || S.user.must_change_pw) return;
+  if (S.deepGo) { const go = S.deepGo; S.deepGo = null; S.sheet = null; ACT.notif({ link: JSON.stringify(go) }); return; }
+  if (!S.deepCode) return;
   const code = S.deepCode; S.deepCode = null; const l = findLoc(code);
   if (l) ACT.loc({ id: l.id }); else toast('라벨 코드 「' + code + '」 위치가 앱에 없습니다.', true);
+}
+/* 연결이 끊겨 앱 목록에 못 올린 파일이 이 폰에 적혀 있으면 마저 올린다 */
+function flushUps() {
+  if (!S.api.flushUploads || !S.user || !online() || !store.get('gaya-pendup-' + S.user.id, null)) return;
+  S.api.flushUploads().then(n => { if (!n) return; note(`연결이 끊겼던 파일 ${n}개를 자료 목록에 올렸습니다`); loadCache().then(() => { if (!S.busy) render(); }).catch(() => {}); }).catch(() => {});
 }
 
 /* 파일 올리기 */
@@ -3167,16 +3257,18 @@ async function uploadFiles(files) {
   if (!files.length) return; const fid = route().folder;
   if (!fid) return toast('폴더를 먼저 여세요.', true);
   if (!online()) return toast('오프라인이라 올릴 수 없습니다. 연결되면 다시 해 주세요.', true);
-  let ok = 0; let lastTarget = null; const fails = [];
+  let ok = 0, later = 0; let lastTarget = null; const fails = [];
   for (let i = 0; i < files.length; i++) {
     progress(`올리는 중 ${i + 1}/${files.length} · ${files[i].name}`);
     try { const r = await S.api.upload(fid, files[i]); ok++; lastTarget = r.folder_id; }
-    catch (e) { fails.push(files[i].name + ': ' + (isNet(e) ? '연결이 끊김' : e.message)); }
+    catch (e) { if (e.later) later++; else fails.push(files[i].name + ': ' + (isNet(e) ? '연결이 끊김' : e.message)); }
   }
   try { await loadCache(); } catch {}
   render();
   const moved = lastTarget && lastTarget !== fid;
-  if (fails.length) toast((ok ? ok + '개 올림 · ' : '') + fails.length + '개 실패 — ' + fails.join(' / '), true);
+  const laterMsg = later ? `${later}개는 저장소에 올라갔지만 연결이 끊겨 아직 목록에 없습니다. 연결되면 자동으로 목록에 올라갑니다.` : '';
+  if (fails.length) toast((ok ? ok + '개 올림 · ' : '') + fails.length + '개 실패 — ' + fails.join(' / ') + (laterMsg ? ' · ' + laterMsg : ''), true);
+  else if (later) toast((ok ? ok + '개 올림 · ' : '') + laterMsg, true);
   else toast(ok + '개 올렸습니다' + (moved ? ' · ' + folderPathText(lastTarget) + ' 폴더로 정리됨' : ''), false, null, moved);
 }
 async function pickPhoto(file) {
@@ -3230,6 +3322,93 @@ async function startScan() {
 }
 function stopScan() { clearTimeout(scanLoop); if (scanStream) { scanStream.getTracks().forEach(t => t.stop()); scanStream = null; } S.scanMsg = ''; }
 
+/* ───────── 새 비밀번호 정하기 (관리자가 초기화한 임시 비밀번호로 로그인한 경우) ───────── */
+Object.assign(ACT, {
+  forcePw: async (ds, f) => {
+    const val = n => ((f.elements.namedItem(n) || {}).value || '');
+    const old = S.pwJust || val('old'), nw = val('nw'), nw2 = val('nw2');
+    if (!old) { S.authErr = '관리자에게 받은 임시 비밀번호 6자리를 넣으세요.'; return render(); }
+    if (nw.length < 6) { S.authErr = '새 비밀번호는 6자 이상으로 정하세요.'; return render(); }
+    if (nw !== nw2) { S.authErr = '새 비밀번호 확인이 맞지 않습니다. 두 칸에 같은 비밀번호를 넣으세요.'; return render(); }
+    if (nw === old) { S.authErr = '임시 비밀번호와 다른 비밀번호로 정하세요.'; return render(); }
+    if (!online()) { S.authErr = '인터넷에 연결되어 있지 않습니다. 연결된 뒤 다시 누르세요.'; return render(); }
+    S.busy = true; S.authErr = ''; render();
+    try {
+      await S.api.changePassword(old, nw);
+      S.pwJust = null; S.user = { ...S.user, must_change_pw: false }; store.set('gaya-user', S.user); S.busy = false;
+      ['fp-old', 'fp-new', 'fp-new2'].forEach(id => { const x = document.getElementById(id); if (x) x.value = ''; });
+      render(); onEnterRoute(); toast('새 비밀번호로 바꿨습니다. 다음부터 이 비밀번호로 로그인하세요.');
+      if (!store.get('gaya-tour', false) && !S.sheet) { store.set('gaya-tour', true); openSheet('tour', { step: 0 }); }
+      openDeep(); pushResync();
+    } catch (e) {
+      S.busy = false;
+      if (/지금 비밀번호가 맞지/.test(e.message || '')) { S.pwJust = null; S.authErr = '임시 비밀번호가 맞지 않습니다. 관리자에게 받은 6자리를 다시 넣어 주세요.'; }
+      else S.authErr = isNet(e) ? NET_MSG : e.message;
+      render();
+    }
+  },
+  forceLogout: () => { S.pwJust = null; S.authErr = ''; doLogout(); }
+});
+
+/* ───────── 폰 알림 (앱을 닫아 두어도 새 알림을 폰 알림으로) ─────────
+   · 켜는 것은 사람마다·기기마다 (gaya-push-<사번 id>). 로그아웃하면 이 폰으로 오던 알림을 끊는다
+   · 알림 열쇠(공개 키)가 바뀌면 새로 등록한다 */
+const PUSH_KEY = () => 'gaya-push-' + (S.user ? S.user.id : '');
+const pushSupported = () => !DEMO && 'serviceWorker' in navigator && 'PushManager' in window && 'Notification' in window;
+const pushPerm = () => { try { return Notification.permission; } catch { return 'default'; } };
+const pushOn = () => !!store.get(PUSH_KEY(), false) && pushPerm() === 'granted';
+function pushState() { // 설정 화면에 보일 상태: [켤 수 있음, 설명]
+  if (isIOS() && !isStandalone()) return [false, '아이폰은 홈 화면에 추가한 앱 아이콘으로 열었을 때만 켤 수 있습니다 (더보기 › 홈 화면에 앱 추가).'];
+  if (!pushSupported()) return [false, '이 브라우저는 폰 알림을 지원하지 않습니다. 크롬·삼성 인터넷 또는 홈 화면에 추가한 앱에서 켜세요.'];
+  if (pushPerm() === 'denied') return [false, '폰 설정에서 이 앱의 알림이 막혀 있습니다. 폰 설정 › 알림(또는 브라우저 › 사이트 설정 › 알림)에서 허용한 뒤 다시 켜세요.'];
+  return [true, can(S.user, 'users') ? '앱을 닫아 두어도 재고 부족 · 가입 신청 · 댓글 알림이 폰에 뜹니다' : '앱을 닫아 두어도 내 자재·자료에 달린 댓글 알림이 폰에 뜹니다'];
+}
+const b64uBytes = s => { s = String(s).replace(/-/g, '+').replace(/_/g, '/'); while (s.length % 4) s += '='; const b = atob(s); return Uint8Array.from(b, c => c.charCodeAt(0)); };
+const pushUa = () => { const u = navigator.userAgent; return (/iPhone|iPad/.test(u) ? '아이폰' : /Android/.test(u) ? '안드로이드' : /Windows/.test(u) ? '윈도우' : /Mac/.test(u) ? '맥' : '기타') + ' · ' + (/SamsungBrowser/.test(u) ? '삼성 인터넷' : /EdgA?\//.test(u) ? '엣지' : /CriOS|Chrome/.test(u) ? '크롬' : /Safari/.test(u) ? '사파리' : '브라우저'); };
+async function pushSync() {
+  const key = await S.api.pushKey();
+  if (!key) throw new Error('폰 알림 보내는 곳이 아직 준비되지 않았습니다. 개발자에게 알려 주세요.');
+  const reg = await withTimeout(navigator.serviceWorker.ready, 10000);
+  let sub = await reg.pushManager.getSubscription();
+  if (sub && store.get('gaya-pushkey', '') !== key) { await sub.unsubscribe().catch(() => {}); sub = null; } // 알림 열쇠가 바뀌었으면 새로 등록
+  if (!sub) sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: b64uBytes(key) });
+  store.set('gaya-pushkey', key);
+  await S.api.pushSubscribe(sub, pushUa());
+  store.set('gaya-pushsync', { u: S.user.id, at: Date.now() });
+}
+async function pushEnable() {
+  const [can_, why] = pushState(); if (!can_) return toast(why, true);
+  if (!online()) return toast('오프라인이라 켤 수 없습니다. 연결되면 다시 켜 주세요.', true);
+  let perm = pushPerm();
+  if (perm === 'default') { try { perm = await Notification.requestPermission(); } catch { perm = pushPerm(); } } // 폰이 「알림을 허용할까요?」를 묻는다
+  if (perm !== 'granted') return toast('알림을 허용하지 않아 켜지 못했습니다. 다시 켜고 「허용」을 누르세요.', true);
+  progress('폰 알림을 켜는 중…');
+  try { await pushSync(); store.set(PUSH_KEY(), true); progress(null); toast('폰 알림을 켰습니다. 앱을 닫아 두어도 새 알림이 폰에 뜹니다.'); }
+  catch (e) { progress(null); toast(isNet(e) ? NET_MSG : (e.message || '폰 알림을 켜지 못했습니다.'), true); }
+}
+async function pushDisable() {
+  store.del(PUSH_KEY());
+  try {
+    const reg = await withTimeout(navigator.serviceWorker.getRegistration(), 3000); const sub = reg && reg.pushManager && await reg.pushManager.getSubscription();
+    if (sub) { await S.api.pushUnsubscribe(sub.endpoint).catch(() => {}); await sub.unsubscribe().catch(() => {}); }
+  } catch {}
+  toast('폰 알림을 껐습니다');
+}
+/* 로그인할 때·하루에 한 번: 켜 둔 사람이면 등록을 다시 맞춘다 (폰이 주소를 바꾸는 경우가 있어서) */
+function pushResync() {
+  if (!S.user || S.user.must_change_pw || !pushSupported() || !pushOn() || !online()) return;
+  const last = store.get('gaya-pushsync', null);
+  if (last && last.u === S.user.id && Date.now() - (last.at || 0) < 864e5) return;
+  pushSync().catch(e => console.warn('push sync', e));
+}
+Object.assign(ACT, {
+  pushToggle: async (d, el) => { const want = el.checked; el.checked = !want; if (want) await pushEnable(); else await pushDisable(); render(); }
+});
+if ('serviceWorker' in navigator) navigator.serviceWorker.addEventListener('message', e => { // 앱이 열린 채로 폰 알림을 누른 경우
+  const m = e.data || {}; if (m.type !== 'gaya-open') return;
+  if (S.user && S.cache && !S.user.must_change_pw) { S.sheet = null; ACT.notif({ link: JSON.stringify(m.link || {}) }); } else S.deepGo = m.link || null;
+});
+
 /* ───────── 시작 ─────────
    1) 이 폰에 받아 둔 내용이 있으면 바로 그 화면부터 보여 준다 (오프라인·느린 연결에서도 앱이 바로 열림)
    2) 그다음 서버에 로그인 상태를 확인하고 최신 내용으로 바꾼다
@@ -3244,7 +3423,7 @@ function ensureDom() {
 }
 async function boot() {
   ensureDom();
-  S.deepCode = takeDeepCode();
+  S.deepCode = takeDeepCode(); S.deepGo = takeDeepGo();
   try { history.replaceState({ gayaBase: 1 }, '', location.pathname + location.hash); } catch {}
   if (window.GAYA_SITE && !window.GAYA_CONFIG) { // 실제 앱인데 설정 파일(config.js)을 못 받은 경우: 체험판으로 바뀌지 않게 멈추고 안내한다
     $('#app').innerHTML = `<div class="auth-wrap"><div class="auth"><div class="card"><h2>앱 설정을 불러오지 못했습니다</h2><p class="muted" style="margin:0">인터넷이 약하거나 서버를 고치는 중일 수 있습니다. 잠시 뒤 다시 열어 주세요.</p><button class="btn primary block big" onclick="location.reload()">다시 열기</button></div></div></div>`;

@@ -3,8 +3,9 @@
    · 데이터(Supabase)와 자료 저장소(구글)는 저장하지 않는다 → 저장·조회는 항상 서버 기준
    · 화면(index.html)과 연결 설정(config.js)은 인터넷에서 먼저 받되, 3초 안에 안 오면 저장본으로 먼저 연다 (전파 약한 곳에서 몇 분씩 기다리지 않게)
    · app.js / app.css 는 버전 번호(?v=)가 붙은 주소 그대로 저장한다 → 새 버전을 올리면 새로 받는다
-   · 새 버전을 받다가 꼭 필요한 파일 하나라도 실패하면 설치하지 않는다 → 옛 버전이 그대로 남아 앱이 깨지지 않는다 */
-const VER = '039b4896';
+   · 새 버전을 받다가 꼭 필요한 파일 하나라도 실패하면 설치하지 않는다 → 옛 버전이 그대로 남아 앱이 깨지지 않는다
+   · 폰 알림: 서버가 보낸 알림을 폰 알림으로 띄우고, 누르면 앱을 열어 그 화면으로 간다 */
+const VER = '56ba3d21';
 const SHELL = 'gaya-shell-' + VER;
 const FONT = 'gaya-font';
 const LIB = 'gaya-lib'; // PDF 보기 도구: 버전이 바뀌어도 지우지 않는다 (전파 없는 곳에서 저장한 PDF 를 열기 위해)
@@ -36,7 +37,7 @@ self.addEventListener('activate', e => {
 /* 인터넷 먼저, 3초 안에 답이 없거나 실패하면 저장본 (받아지는 대로 저장본도 새것으로 바꿔 둔다) */
 function netFirst(req, key, ms = 3000) {
   const store = r => { if (r && r.ok) { const c = r.clone(); caches.open(SHELL).then(x => x.put(key, c)); } return r; };
-  const net = fetch(req).then(store);
+  const net = fetch(req, { cache: 'no-cache' }).then(store); // 브라우저 임시 저장본 말고 서버에 새로 묻는다 (바뀐 게 없으면 짧은 답만 옴)
   return new Promise(resolve => {
     let done = false;
     const fromCache = async () => { const hit = await caches.match(key, { ignoreSearch: true }); if (hit && !done) { done = true; resolve(hit); } return !!hit; };
@@ -66,4 +67,25 @@ self.addEventListener('fetch', e => {
   if (url.pathname.includes('/vendor/pdf')) { e.respondWith(caches.open(LIB).then(async c => (await c.match(req, { ignoreSearch: true })) || fetch(req).then(r => { if (r.ok) c.put(req, r.clone()); return r; }))); return; }
   if (url.pathname.includes('/vendor/')) { e.respondWith(caches.open(VENDOR).then(async c => (await c.match(req)) || fetch(req).then(r => { if (r.ok) c.put(req, r.clone()); return r; }))); return; }
   e.respondWith(caches.match(req).then(hit => hit || fetch(req).then(r => { if (r.ok) { const c = r.clone(); caches.open(SHELL).then(x => x.put(req, c)); } return r; })));
+});
+
+/* ───────── 폰 알림 ───────── */
+self.addEventListener('push', e => {
+  let d = {};
+  try { d = e.data ? e.data.json() : {}; } catch { d = { t: e.data ? e.data.text() : '' }; }
+  e.waitUntil(self.registration.showNotification(d.t || '가야 자재·자료', {
+    body: d.b || '', tag: d.id || undefined, icon: 'icon-192.png', lang: 'ko', data: { link: d.l || {}, id: d.id || '' }
+  }));
+});
+self.addEventListener('notificationclick', e => {
+  e.notification.close();
+  const link = (e.notification.data || {}).link || {};
+  e.waitUntil((async () => {
+    const scope = new URL(self.registration.scope);
+    const wins = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
+    const w = wins.find(c => new URL(c.url).pathname.startsWith(scope.pathname));
+    if (w) { try { await w.focus(); } catch {} w.postMessage({ type: 'gaya-open', link }); return; } // 열려 있는 앱으로
+    const u = new URL(scope.href); u.searchParams.set('go', JSON.stringify(link));
+    await self.clients.openWindow(u.href);
+  })());
 });
