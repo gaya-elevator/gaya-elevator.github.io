@@ -535,5 +535,12 @@ label.crow{cursor:pointer}
 .recvlist .crow{align-items:flex-end}
 .ordbar .btn{flex:1;padding:0 8px;min-width:0}
 .ordbar .btn.ghost{flex:.7}
+/* ───────── 안정화 업데이트 ───────── */
+.offline.newver{background:var(--accent)}
+.offline.newver .btn{min-height:30px;padding:4px 12px;background:#fff;color:var(--accent);border:0;font-weight:700}
+.thumb{flex:none;width:44px;height:44px;border-radius:10px;overflow:hidden;background:var(--sunk);display:grid;place-items:center;color:var(--muted);margin-right:2px}
+.thumb img{width:100%;height:100%;object-fit:cover;display:block}
+.thumb.none svg{width:20px;height:20px;opacity:.45}
+.cartlist .crow > .iconbtn{margin-left:6px}
 
 @media print{body *{visibility:hidden}#labels,#labels *{visibility:visible}#labels{position:absolute;left:0;top:0;width:100%;grid-template-columns:repeat(4,1fr)}.qrlabel{break-inside:avoid}body.print-poster{background:#fff}body.print-poster .posterwrap{position:absolute;left:0;top:0;width:210mm;box-shadow:none;border-radius:0}body.print-poster #poster,body.print-poster #poster *{visibility:visible}#poster{page:poster;-webkit-print-color-adjust:exact;print-color-adjust:exact}}@page poster{size:A4;margin:0}@media print{.noprint{display:none!important}}

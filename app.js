@@ -10,7 +10,7 @@ const CONFIG = Object.assign({
   STORAGE_WARN: 0.8
 }, window.GAYA_CONFIG || {});
 const DEMO = !CONFIG.SUPABASE_URL;
-const APP_VER = '8bbb1bbd';
+const APP_VER = '039b4896';
 
 /* ───────── 작은 도구들 ───────── */
 const $ = (s, r = document) => r.querySelector(s);
@@ -57,7 +57,8 @@ applySize(sizeNow());
 const isIOS = () => /iPhone|iPad|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
 const isStandalone = () => (window.matchMedia && matchMedia('(display-mode: standalone)').matches) || navigator.standalone === true;
 /* 파일 내려받기 (엑셀에서 바로 열리는 CSV: 한글이 깨지지 않게 BOM 을 붙인다) */
-const csvCell = v => { const t = String(v ?? ''); return /[",\n\r]/.test(t) ? '"' + t.replace(/"/g, '""') + '"' : t; };
+// 글자 칸이 = + - @ 로 시작하면 엑셀이 수식으로 실행하므로 앞에 ' 를 붙여 글자로 둔다 (숫자는 그대로)
+const csvCell = v => { let t = String(v ?? ''); if (typeof v === 'string' && /^[=+\-@\t\r]/.test(t)) t = "'" + t; return /[",\n\r]/.test(t) ? '"' + t.replace(/"/g, '""') + '"' : t; };
 function downloadCSV(name, rows) {
   const text = '\uFEFF' + rows.map(r => r.map(csvCell).join(',')).join('\r\n');
   const url = URL.createObjectURL(new Blob([text], { type: 'text/csv;charset=utf-8' }));
@@ -245,7 +246,17 @@ const isNet = e => !!e && (e.net || /Failed to fetch|NetworkError|Load failed|ne
 const NET_MSG = '인터넷 연결이 끊겼거나 서버에 닿지 않습니다. 연결을 확인하고 다시 시도하세요.';
 const netErr = () => Object.assign(new Error(NET_MSG), { net: true });
 const withTimeout = (p, ms) => Promise.race([p, new Promise((_, rej) => setTimeout(() => rej(Object.assign(new Error('timeout'), { net: true })), ms))]);
-const isInt = (v, min = 0) => /^\s*\d+\s*$/.test(String(v ?? '')) && +v >= min;
+const QTY_MAX = 999999; // 수량·최소 재고 칸에 넣을 수 있는 가장 큰 수
+const isInt = (v, min = 0) => /^\s*\d{1,9}\s*$/.test(String(v ?? '')) && +v >= min && +v <= QTY_MAX;
+/* 기다리는 시간을 정한 fetch: 전파가 약한 곳에서 요청이 끝없이 걸려 저장 버튼이 멈춰 있지 않게 */
+function fetchT(url, opts = {}, ms = 25000) {
+  if (typeof AbortController === 'undefined') return fetch(url, opts);
+  const ac = new AbortController(); let timedOut = false;
+  const outer = opts.signal; if (outer) { if (outer.aborted) ac.abort(); else outer.addEventListener('abort', () => ac.abort(), { once: true }); }
+  const t = setTimeout(() => { timedOut = true; ac.abort(); }, ms);
+  return fetch(url, { ...opts, signal: ac.signal }).catch(e => { if (timedOut) throw new TypeError('Failed to fetch (시간 초과)'); throw e; }).finally(() => clearTimeout(t));
+}
+const isTyping = () => { const a = document.activeElement; return !!a && (a.tagName === 'TEXTAREA' || (a.tagName === 'INPUT' && !/^(checkbox|radio|button|submit|file)$/.test(a.type))); };
 const ic = (n, cls = '') =>`<svg class="${cls}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${P[n] || ''}</svg>`;
 
 /* ───────── 권한 ─────────
@@ -340,6 +351,7 @@ function makeDemoAPI() {
     demo: true,
     async session() { await tick(); const u = me(); return u ? clone(u) : null; },
     async whoami() { const u = me(); return u ? clone(u) : null; },
+    async opDone(op) { return !!(op && (D.tx.some(t => t.op_id === op) || (D.ops && D.ops[op] != null))); },
     async txToday() { const t = new Date(); t.setHours(0, 0, 0, 0); return D.tx.filter(x => ['in', 'out', 'move'].includes(x.type) && new Date(x.created_at) >= t).length; },
     async login(emp_no, pw) {
       await tick();
@@ -508,7 +520,9 @@ function makeDemoAPI() {
       (ids || []).forEach(id => { const t = byId(D.tx, id); const it = t && byId(D.items, t.item_id);
         if (!t) fail('기록을 찾지 못했습니다.'); if (t.canceled_by) fail(itemLabel(it) + ': 이미 취소된 기록입니다.');
         if (!can(u, 'cancel', t)) fail(itemLabel(it) + ': 본인이 7일 안에 한 기록만 취소할 수 있습니다.'); });
-      for (const id of ids) await api.stockCancel({ tx_id: id });
+      const snap = clone(D); // 하나라도 안 되면 전부 원래대로 (실제 서버와 같게)
+      try { for (const id of ids) await api.stockCancel({ tx_id: id }); }
+      catch (e) { Object.keys(D).forEach(k => delete D[k]); Object.assign(D, snap); save(); throw e; }
       if (op) { D.ops = D.ops || {}; D.ops[op] = ids.length; save(); }
       return ids.length;
     },
@@ -613,11 +627,13 @@ function makeDemoAPI() {
       if (code && D.locations.some(l => !l.deleted_at && (l.code || '').toUpperCase() === code && l.id !== x.id)) fail('같은 라벨 코드(' + code + ')가 이미 있습니다. 다른 코드를 정하세요.');
       if (!x.id) {
         const parent = byId(D.locations, x.parent_id);
+        if (x.parent_id && (!parent || parent.deleted_at)) fail('안에 넣을 위치를 찾지 못했습니다. 화면을 새로 고친 뒤 다시 하세요.');
+        if (parent && parent.kind === 'slot') fail('위치는 구역 › 캐비넷·선반 › 칸, 세 단계까지만 만들 수 있습니다.');
         const l = { id: uid('l'), parent_id: x.parent_id || null, name: x.name.trim(), code: (x.code || '').trim().toUpperCase(), kind: parent ? (parent.parent_id ? 'slot' : 'unit') : 'zone', photo: x.photo || '', sort: D.locations.length };
         D.locations.push(l); log('위치 추가', 'location', l.id, locPath(l.id) + (l.code ? ' [' + l.code + ']' : '')); save(); return l.id;
       }
       const l = byId(D.locations, x.id); const old = locPath(l.id);
-      ['name', 'code', 'photo'].forEach(f => { if (x[f] !== undefined) l[f] = f === 'code' ? String(x[f]).toUpperCase() : x[f]; });
+      ['name', 'code', 'photo'].forEach(f => { if (x[f] !== undefined) l[f] = f === 'code' ? String(x[f]).trim().toUpperCase() : f === 'name' ? String(x[f]).trim() : x[f]; });
       log('위치 수정', 'location', l.id, old + ' → ' + locPath(l.id)); save(); return l.id;
     },
     async deleteLocation(id) {
@@ -930,33 +946,52 @@ function makeDemoAPI() {
    자료 파일 실물은 구글 앱스 스크립트(DRIVE_STORES)를 거쳐 회사용 구글 드라이브에 저장한다. */
 function makeLiveAPI() {
   const sb = window.supabase.createClient(CONFIG.SUPABASE_URL, CONFIG.SUPABASE_ANON_KEY, {
-    auth: { persistSession: true, autoRefreshToken: true, storageKey: 'gaya-auth' }
+    auth: { persistSession: true, autoRefreshToken: true, storageKey: 'gaya-auth' },
+    global: { fetch: (u, o) => fetchT(u, o, 25000) } // 25초 넘게 답이 없으면 「연결 끊김」으로 본다
   });
   let me = null;
   const email = emp => String(emp).trim().toLowerCase() + '@' + CONFIG.EMAIL_DOMAIN;
+  const AUTH_MSG = '로그인이 풀렸습니다. 다시 로그인해 주세요. (다른 기기에서 로그아웃했거나 오래 쓰지 않으면 이렇게 됩니다)';
+  const isAuthErr = e => { const m = (e && (e.message || e.msg)) || ''; return !!e && (e.status === 401 || e.code === 'PGRST301' || e.code === 'PGRST303' || /JWT expired|invalid JWT|JWSError|refresh token/i.test(m) || (e.code === '42501' && /permission denied/i.test(m) && !/function _/.test(m))); };
   function errMsg(e) {
     const m = (e && (e.message || e.error_description || e.msg)) || String(e);
+    if (e && e.code === 'GY409') return m.replace(/^.*?ERROR:\s*/, '');
+    if (e && (e.code === 'PGRST202' || /Could not find the function/i.test(m))) return '앱이 예전 버전입니다. 앱을 완전히 닫았다가 다시 열어 주세요.';
     if (/Invalid login credentials/i.test(m)) return '사내번호 또는 비밀번호가 맞지 않습니다.';
+    if (/Database error saving new user/i.test(m)) return '가입하지 못했습니다. 사내번호는 영문·숫자 2~20자로 적고, 이미 가입한 번호가 아닌지 관리자에게 확인하세요.';
     if (/already registered|already exists|duplicate key.*emp_no/i.test(m)) return '이미 가입된 사내번호입니다. 비밀번호를 잊었다면 관리자에게 초기화를 요청하세요.';
     if (/banned/i.test(m)) return '사용이 중지된 계정입니다. 관리자에게 문의하세요.';
     if (/rate limit|too many/i.test(m)) return '요청이 한꺼번에 몰렸습니다. 1~2분 뒤에 다시 시도하세요.';
     if (/Password should be at least/i.test(m)) return '비밀번호는 6자 이상으로 정하세요.';
     if (/Email not confirmed/i.test(m)) return '관리자 설정 확인이 필요합니다 (Supabase › Authentication › Confirm email 끄기).';
     if (NETRE.test(m)) return NET_MSG;
-    if (/JWT expired|invalid JWT/i.test(m)) return '로그인이 만료되었습니다. 다시 로그인하세요.';
+    if (isAuthErr(e)) return AUTH_MSG;
+    if (/deadlock detected|could not serialize|lock timeout|canceling statement due to statement timeout/i.test(m)) return '다른 사람과 같은 자재를 동시에 저장해 잠시 막혔습니다. 다시 눌러 주세요.';
+    if (/out of range for type integer|value too large/i.test(m)) return '숫자가 너무 큽니다. 수량을 확인하세요.';
+    if (/violates check constraint "\w+_len_chk"/i.test(m)) return '입력한 글이 너무 깁니다. 줄여서 다시 저장하세요.';
+    if (/violates foreign key constraint/i.test(m)) return '연결된 위치나 품목이 지워졌습니다. 화면을 새로 고친 뒤 다시 하세요.';
+    if (/invalid input syntax for type uuid/i.test(m)) return '화면 정보가 오래되었습니다. 새로 고친 뒤 다시 하세요.';
     if (/duplicate key.*locations|locations_code/i.test(m)) return '같은 라벨 코드를 쓰는 위치가 이미 있습니다. 그 위치의 코드를 먼저 바꾸세요.';
     if (/duplicate key/i.test(m)) return '같은 내용이 이미 있습니다.';
     if (/invalid input syntax for type (integer|bigint)/i.test(m)) return '숫자 칸에는 0 이상의 정수만 넣을 수 있습니다.';
     if (/violates check constraint/i.test(m)) return '수량이 맞지 않습니다. 0보다 작아질 수 없습니다.';
-    return m.replace(/^.*?ERROR:\s*/, '');
+    if (/duplicate key.*tx_op_id/i.test(m)) return '같은 저장이 동시에 두 번 들어왔습니다. 기록을 확인하세요.';
+    const out = m.replace(/^.*?ERROR:\s*/, '');
+    return /[가-힣]/.test(out) ? out : '서버 오류: ' + out.slice(0, 160);
   }
   const NETRE = /Failed to fetch|NetworkError|Load failed|network request failed|fetch failed/i;
-  const E = e => { const m = (e && (e.message || e.error_description || e.msg)) || String(e); const x = new Error(errMsg(e)); if (NETRE.test(m) || (e && (e.status === 0 || e.name === 'AuthRetryableFetchError'))) x.net = true; return x; };
+  const E = e => { const m = (e && (e.message || e.error_description || e.msg)) || String(e); const x = new Error(errMsg(e)); x.code = e && e.code;
+    if (NETRE.test(m) || (e && (e.status === 0 || e.name === 'AuthRetryableFetchError'))) x.net = true;
+    else if (isAuthErr(e)) x.auth = true;
+    else if (e && e.code === 'GY409') x.dup = true;
+    else if (/duplicate key.*tx_op_id/i.test(m)) x.unsure = true; // 같은 요청이 동시에 두 번 → 저장됐는지 확인해 본다
+    return x; };
   async function q(p) { const { data, error } = await p; if (error) throw E(error); return data; }
   const rpc = (fn, args = {}) => q(sb.rpc(fn, args));
-  async function all(table, cols, build = x => x) { // 1000개씩 끊어 전부 받기
+  async function all(table, cols, build = x => x, key = ['id']) { // 1000개씩 끊어 전부 받기 (겹치지 않는 순서를 붙여야 줄이 빠지거나 겹치지 않는다)
     const out = []; for (let from = 0; ; from += 1000) {
-      const rows = await q(build(sb.from(table).select(cols)).range(from, from + 999));
+      let qb = build(sb.from(table).select(cols)); key.forEach(k => { qb = qb.order(k, { ascending: true }); });
+      const rows = await q(qb.range(from, from + 999));
       out.push(...rows); if (rows.length < 1000) return out;
     }
   }
@@ -966,12 +1001,13 @@ function makeLiveAPI() {
   /* 구글 드라이브 창고 (앱스 스크립트 웹앱) */
   const stores = () => (CONFIG.DRIVE_STORES || []).filter(s => s.url);
   const storeUrl = no => { const s = stores(); const hit = s.find(x => x.no === no); return (hit || s[s.length - 1] || {}).url; };
+  const DRIVE_WAIT = { search: 15000, upload: 180000, uploadChunk: 180000, download: 120000 };
   async function drive(action, payload = {}, storeNo) {
     const url = storeUrl(storeNo); if (!url) throw new Error('자료 저장소가 아직 연결되지 않았습니다. 개발자에게 알려 주세요.');
     const { data: { session } } = await sb.auth.getSession();
     let r;
-    try { r = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' }, body: JSON.stringify({ token: session && session.access_token, action, ...payload }) }); }
-    catch { if (!navigator.onLine) throw netErr(); throw new Error('자료 저장소(구글 드라이브)에 연결되지 않습니다. 잠시 뒤 다시 해 보고, 계속되면 관리자에게 알려 주세요.'); }
+    try { r = await fetchT(url, { method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' }, body: JSON.stringify({ token: session && session.access_token, action, ...payload }) }, DRIVE_WAIT[action] || 60000); }
+    catch (e) { if (!navigator.onLine || /시간 초과/.test(e && e.message || '')) throw netErr(); throw new Error('자료 저장소(구글 드라이브)에 연결되지 않습니다. 잠시 뒤 다시 해 보고, 계속되면 관리자에게 알려 주세요.'); }
     const j = await r.json().catch(() => ({ ok: false, error: '자료 저장소 응답을 읽지 못했습니다. 잠시 뒤 다시 시도하세요.' }));
     if (!j.ok) throw new Error(/^알 수 없는 작업/.test(j.error || '') ? '자료 저장소가 아직 이 기능을 모릅니다(저장소 새 버전 배포 전). 개발자·관리자에게 알려 주세요.' : (j.error || '저장소 작업 실패'));
     return j;
@@ -1004,7 +1040,7 @@ function makeLiveAPI() {
       if (error) { const x = E(error); if (x.net) throw x; return null; } // 연결 문제면 「서버에 닿지 않음」, 로그인 만료면 다시 로그인
       if (!session) return null;
       me = await profile(session.user.id);
-      if (me && me.status === 'disabled') { await sb.auth.signOut(); return null; }
+      if (me && me.status === 'disabled') { try { await withTimeout(sb.auth.signOut({ scope: 'local' }), 4000); } catch {} return null; }
       return me;
     },
     async login(emp_no, pw) {
@@ -1012,7 +1048,7 @@ function makeLiveAPI() {
       if (error) throw E(error);
       me = await profile(data.user.id);
       if (!me) throw new Error('계정 정보를 찾지 못했습니다. 관리자에게 문의하세요.');
-      if (me.status === 'disabled') { await sb.auth.signOut(); throw new Error('사용이 중지된 계정입니다. 관리자에게 문의하세요.'); }
+      if (me.status === 'disabled') { try { await withTimeout(sb.auth.signOut({ scope: 'local' }), 4000); } catch {} throw new Error('사용이 중지된 계정입니다. 관리자에게 문의하세요.'); }
       if (me.status === 'active') rpc('log_event', { p_action: '로그인', p_summary: me.name + ' 로그인' }).catch(() => {});
       return me;
     },
@@ -1028,12 +1064,20 @@ function makeLiveAPI() {
       me = await profile(data.user.id);
       return me;
     },
-    async whoami() { // 30초마다: 계정이 중지·삭제되었는지, 권한이 바뀌었는지 확인 (연결 문제면 아무것도 바꾸지 않음)
+    async whoami() { // 30초마다: 계정이 중지·삭제되었는지, 권한이 바뀌었는지 확인. undefined = 확인 못 함(연결 문제), 'expired' = 로그인이 풀림
       const { data: { session }, error } = await sb.auth.getSession();
-      if (error || !session) return undefined;
-      const p = await profile(session.user.id); if (p) me = p; return p || null;
+      if (error) { const x = E(error); return x.net ? undefined : 'expired'; }
+      if (!session) return 'expired';
+      let p; try { p = await profile(session.user.id); } catch (e) { if (e.auth) return 'expired'; throw e; }
+      if (p) me = p; return p || null;
     },
-    async logout() { await sb.auth.signOut(); me = null; store.del('gaya-cache'); store.del('gaya-user'); },
+    async logout() { // 오프라인이어도 이 폰의 로그인은 반드시 지운다 (다음 사람이 앞사람 이름으로 저장하지 않게)
+      me = null;
+      try { await withTimeout(sb.auth.signOut({ scope: 'local' }), 4000); } catch {}
+      try { Object.keys(localStorage).filter(k => k.startsWith('gaya-auth')).forEach(k => localStorage.removeItem(k)); } catch {}
+      store.del('gaya-cache'); store.del('gaya-user');
+    },
+    opDone: op => rpc('op_done', { p_op: op }),
     async changePassword(oldPw, newPw) {
       if (!newPw || newPw.length < 6) throw new Error('새 비밀번호는 6자 이상으로 정하세요.');
       const chk = await sb.auth.signInWithPassword({ email: email(me.emp_no), password: oldPw });
@@ -1046,7 +1090,7 @@ function makeLiveAPI() {
       const nd = x => x.is('deleted_at', null);
       const [locations, categories, items, stock, people, folders, docs] = await Promise.all([
         all('locations', '*', nd), all('categories', '*', nd), all('items', '*', nd),
-        all('stock', 'item_id,location_id,qty', x => x.gt('qty', 0)), all('profiles', 'id,name,role,status'),
+        all('stock', 'item_id,location_id,qty', x => x.gt('qty', 0), ['item_id', 'location_id']), all('profiles', 'id,name,role,status'),
         all('folders', '*', nd), all('docs', 'id,folder_id,name,kind,mime,size,drive_id,store_no,url,uploaded_by,created_at', nd)
       ]);
       return { locations, categories, items, stock, people, folders, docs };
@@ -1082,12 +1126,12 @@ function makeLiveAPI() {
     stockCancel: d => rpc('stock_cancel', { p_tx: d.tx_id, p_op: d.op_id }),
     stockAdjust: d => rpc('stock_adjust', { p_item: d.item_id, p_loc: d.location_id, p_qty: +d.qty, p_reason: d.reason || '', p_op: d.op_id }),
 
-    saveItem: x => { const p = { ...x }; delete p.op_id; delete p.created_at; delete p.updated_at; delete p.deleted_at; return rpc('item_save', { p }); },
+    saveItem: x => { const p = { ...x }; delete p.op_id; delete p.created_at; delete p.updated_at; delete p.deleted_at; delete p.countLoc; return rpc('item_save', { p, p_op: p.id ? null : (x.op_id || null) }); },
     deleteItem: id => rpc('item_delete', { p_id: id }),
     bulkItems: (rows, op) => rpc('items_bulk', { p_rows: rows, p_op: op || null }),
-    saveLocation: x => rpc('location_save', { p: { id: x.id || null, parent_id: x.parent_id || null, name: x.name, code: x.code || '', photo: x.photo || '' } }),
+    saveLocation: x => rpc('location_save', { p: { id: x.id || null, parent_id: x.parent_id || null, name: String(x.name || '').trim(), code: String(x.code || '').trim().toUpperCase(), photo: x.photo || '' }, p_op: x.id ? null : (x.op_id || null) }),
     deleteLocation: id => rpc('location_delete', { p_id: id }),
-    saveCategory: x => rpc('category_save', { p: { id: x.id || null, parent_id: x.parent_id || null, name: x.name } }),
+    saveCategory: x => rpc('category_save', { p: { id: x.id || null, parent_id: x.parent_id || null, name: x.name }, p_op: x.id ? null : (x.op_id || null) }),
     deleteCategory: id => rpc('category_delete', { p_id: id }),
 
     mkdir: ({ parent_id, name, auto_sort }) => rpc('folder_create', { p_parent: parent_id || null, p_name: name, p_auto: !!auto_sort }),
@@ -1105,7 +1149,7 @@ function makeLiveAPI() {
       const id = await rpc('doc_add', { p_folder: target, p_name: file.name, p_kind: 'file', p_mime: file.type || '', p_size: file.size, p_drive_id: up.id, p_store: up.store, p_url: null });
       return { id, folder_id: target };
     },
-    addLink: (folder_id, { name, url }) => rpc('doc_add', { p_folder: folder_id, p_name: name, p_kind: /youtu\.?be/.test(url || '') ? 'video' : 'link', p_mime: '', p_size: null, p_drive_id: null, p_store: null, p_url: url }),
+    addLink: (folder_id, { name, url, op_id }) => rpc('doc_add', { p_folder: folder_id, p_name: name, p_kind: /youtu\.?be/.test(url || '') ? 'video' : 'link', p_mime: '', p_size: null, p_drive_id: null, p_store: null, p_url: url, p_op: op_id || null }),
     async renameDoc(id, name) { const d = S.ix.doc.get(id); await rpc('doc_rename', { p_id: id, p_name: name }); if (d && d.drive_id) drive('renameFile', { id: d.drive_id, name: String(name).trim() }, d.store_no).catch(e => console.warn(e)); },
     async moveDoc(id, folder_id) { const d = S.ix.doc.get(id); await rpc('doc_move', { p_id: id, p_folder: folder_id }); if (d && d.drive_id) drive('moveFile', { id: d.drive_id, path: pathNames(folder_id) }, d.store_no).catch(e => console.warn(e)); },
     async deleteDoc(id) { const d = S.ix.doc.get(id); await rpc('doc_delete', { p_id: id }); if (d && d.drive_id) drive('trashFile', { id: d.drive_id }, d.store_no).catch(e => console.warn(e)); },
@@ -1137,7 +1181,7 @@ function makeLiveAPI() {
       const items = S.cache.items.filter(i => smatch([i.name, i.spec, i.maker, i.models, i.memo].join(' '), qs)).map(i => i.id);
       const byName = S.cache.docs.filter(d => smatch(d.name, qs)).map(d => ({ id: d.id, inside: false }));
       let inside = [];
-      if (qs.length >= 2 && !/[ㄱ-ㅎ]/.test(qs) && stores().length) {
+      if (qs.length >= 2 && !/[ㄱ-ㅎ]/.test(qs) && stores().length && navigator.onLine !== false) {
         try {
           const res = await Promise.all(stores().map(s => drive('search', { q: qs }, s.no).catch(() => ({ ids: [] }))));
           const ids = new Set(res.flatMap(r => r.ids || []));
@@ -1151,7 +1195,7 @@ function makeLiveAPI() {
       const rows = await q(sb.from('comments').select('*').eq('target_type', t).eq('target_id', id).is('deleted_at', null).order('created_at'));
       return rows.map(c => ({ ...c, name: personName(c.user_id) }));
     },
-    addComment: (t, id, body) => rpc('comment_add', { p_type: t, p_id: id, p_body: body }),
+    addComment: (t, id, body, op) => rpc('comment_add', { p_type: t, p_id: id, p_body: body, p_op: op || null }),
     deleteComment: id => rpc('comment_delete', { p_id: id }),
     notifications: () => q(sb.from('notifications').select('*').order('created_at', { ascending: false }).limit(60)),
     async unreadCount() { const { count, error } = await sb.from('notifications').select('id', { count: 'exact', head: true }).is('read_at', null); if (error) throw E(error); return count || 0; },
@@ -1179,10 +1223,11 @@ function makeLiveAPI() {
       o.storage_used = +o.storage_used || 0; o.storage_total = +o.storage_total || 16106127360;
       return o;
     },
-    async putPhoto(blob) {
-      const path = (crypto.randomUUID ? crypto.randomUUID() : uid('p')) + '.jpg';
+    async putPhoto(blob, small) {
+      const base = crypto.randomUUID ? crypto.randomUUID() : uid('p'); const path = base + '.jpg';
       const { error } = await sb.storage.from('photos').upload(path, blob, { contentType: 'image/jpeg', upsert: false });
       if (error) throw E(error);
+      if (small) await sb.storage.from('photos').upload(base + '_t.jpg', small, { contentType: 'image/jpeg', upsert: false }).catch(() => {}); // 목록용 작은 사진 (실패해도 원래 사진으로 보임)
       return sb.storage.from('photos').getPublicUrl(path).data.publicUrl;
     }
   };
@@ -1239,8 +1284,11 @@ function flatTree(kidsMap, root = null, depth = 0, out = []) {
   return out;
 }
 
+let cacheSeq = 0;
 async function loadCache() {
+  const seq = ++cacheSeq;
   const c = await S.api.bootstrap();
+  if (seq !== cacheSeq) return; // 더 나중에 시작한 새로 고침이 있으면 그쪽 결과를 쓴다 (늦게 온 옛 목록으로 덮어쓰지 않게)
   S.cache = c; S.ix = buildIndex(c);
   store.set('gaya-cache', c); // 오프라인일 때 마지막으로 본 내용을 보여 주기 위해 저장
   S.unread = await S.api.unreadCount().catch(() => S.unread);
@@ -1271,6 +1319,7 @@ function resetStack(r) { S.stack = [r]; S.tab = r.tab; ensureTrap(); render(); w
 function goTab(t, toRoot = false) {
   if (S.tab === t && (S.stack.length > 1 || toRoot)) { S.stack = [{ ...ROOTS[t] }]; }
   else if (S.tab !== t) { S.lastTab[S.tab] = S.stack; S.stack = S.lastTab[t] || [{ ...ROOTS[t] }]; }
+  if (t !== 'scan') S.countNext = false; // 「다음 선반」 실사는 스캔 탭에서만
   S.tab = t; S.q = ''; S.searchRes = null; stopScan(); ensureTrap();
   render(); window.scrollTo(0, 0); onEnterRoute();
 }
@@ -1294,7 +1343,7 @@ async function onEnterRoute() {
     else if (r.view === 'doc') { VIEWDATA[key] = { cm: await S.api.comments('doc', r.id), data: await S.api.docData(r.id) }; }
     else if (r.view === 'list') { VIEWDATA[key] = { list: await S.api.notifications() }; }
     else if (r.view === 'users') VIEWDATA[key] = { list: await S.api.users() };
-    else if (r.view === 'log') VIEWDATA[key] = { list: await S.api.audit({ kind: S.logKind }) };
+    else if (r.view === 'log') { const k = S.logKind; const list = await S.api.audit({ kind: k }); if (k !== S.logKind) return; VIEWDATA[key] = { list }; }
     else if (r.view === 'status') VIEWDATA[key] = { st: await S.api.status() };
     else if (r.view === 'trash') VIEWDATA[key] = { list: await S.api.trash() };
     else if (r.view === 'menu' && can(S.user, 'users')) VIEWDATA[key] = { st: await S.api.status(), users: await S.api.users() };
@@ -1331,22 +1380,67 @@ function progress(msg) { clearTimeout(toastTimer); S.toast = msg ? { msg, progre
    · 누르는 동안 버튼을 잠가 두 번 저장되지 않게 한다 (서버에도 op_id 로 중복 방지)
    · 저장이 실패하면 시트를 닫지 않고 입력한 내용을 그대로 둔다
    · 저장은 됐는데 새 목록을 못 받은 경우는 「저장됨」으로 처리한다 (다시 눌러 두 번 저장되는 일 방지) */
-async function run(fn, okMsg, { keepSheet = false, reload = true } = {}) {
+/* 연결이 끊겨 결과를 못 받은 저장 (이 폰·이 사람). 서버에 「됐는지」 물어보기 전까지 기억해 둔다 */
+const pendKey = () => 'gaya-pend-' + (S.user ? S.user.id : '');
+const pendGet = () => (S.user ? store.get(pendKey(), null) : null);
+const pendSet = v => { if (!S.user) return; if (v) store.set(pendKey(), v); else store.del(pendKey()); };
+const PEND_DONE = {}; // 종류별 뒷정리 (담은 자재 비우기 등) — 06-actions 에서 채운다
+async function resolvePending() { // 연결이 돌아오면: 앞서 끊겼던 저장이 됐는지 확인해 알려 준다
+  const p = pendGet(); if (!p || !S.api.opDone || !online() || S.busy) return;
+  let done; try { done = await S.api.opDone(p.op); } catch { return; }
+  if (pendGet() && pendGet().op !== p.op) return;
+  pendSet(null);
+  if (done) { if (PEND_DONE[p.kind]) PEND_DONE[p.kind](p); note(`앞서 연결이 끊겼던 「${p.label || '저장'}」은 저장되어 있습니다.`); }
+  else if (!(S.sheet && S.sheet.d && S.sheet.d.op_id === p.op)) note(`앞서 연결이 끊겼던 「${p.label || '저장'}」은 저장되지 않았습니다. 필요하면 다시 해 주세요.`);
+  render();
+}
+/* 저장 작업 실행기
+   · op: 이 저장의 요청 번호 · label·kind: 연결이 끊겼을 때 알려 줄 이름과 뒷정리 종류 */
+async function run(fn, okMsg, { keepSheet = false, reload = true, op = null, label = '', kind = '', onFail = null } = {}) {
   if (!online()) { toast('오프라인이라 저장할 수 없습니다. 연결되면 다시 눌러 주세요.', true); return false; }
   if (S.busy) return false;
-  S.busy = true; if (S.sheet) S.sheet.err = ''; render();
+  const sh = S.sheet; // 이 저장을 시작한 시트 (끝났을 때 다른 시트가 열려 있으면 건드리지 않는다)
+  S.busy = true; S.already = false; if (sh) sh.err = ''; render();
+  const fail = msg => { S.busy = false; if (sh && S.sheet === sh) { sh.err = msg; render(); } else { render(); toast(msg, true); } return false; };
+  // 앞서 연결이 끊겨 결과를 못 받은 저장이 있으면, 서버에 됐는지부터 묻는다 (두 번 저장 방지)
+  const pend = op && S.api.opDone ? pendGet() : null;
+  if (pend) {
+    let done;
+    try { done = await S.api.opDone(pend.op); } catch (e) { return fail(isNet(e) ? NET_MSG : e.message); }
+    pendSet(null);
+    if (done) {
+      try { await loadCache(); } catch {}
+      if (PEND_DONE[pend.kind]) PEND_DONE[pend.kind](pend);
+      if (op && pend.op === op) { // 같은 저장을 다시 누른 경우 → 이미 된 것으로 끝낸다
+        S.already = true; if (!keepSheet && S.sheet === sh) S.sheet = null;
+        S.busy = false; render(); note('앞에서 누른 저장이 이미 되어 있었습니다. 두 번 저장하지 않았습니다.'); onEnterRoute();
+        return true;
+      }
+      if (pend.kind === 'cart' || pend.kind === 'recv') { S.busy = false; if (S.sheet === sh && sh && (sh.type === 'cart' || sh.type === 'recv')) S.sheet = null; render(); note(`앞서 연결이 끊겼던 「${pend.label || '저장'}」은 이미 저장되어 있었습니다. 목록을 정리했으니 확인하세요.`); return false; }
+      return fail(`앞서 연결이 끊겼던 「${pend.label || '저장'}」은 이미 저장되어 있었습니다. 이번 것도 저장하려면 한 번 더 누르세요.`);
+    }
+  }
   let r;
   try { r = await fn(); }
   catch (e) {
-    S.busy = false;
-    const msg = isNet(e) ? '연결이 끊겨 저장하지 못했습니다. 입력한 내용은 그대로 있으니 연결되면 다시 누르세요.' : e.message;
-    if (S.sheet) { S.sheet.err = msg; render(); } else { render(); toast(msg, true); }
-    return false;
+    let saved = false;
+    if (e.unsure && op) { try { saved = await S.api.opDone(op); } catch {} }
+    if (!saved) {
+      if (isNet(e) && op) pendSet({ op, label, kind, at: Date.now() });
+      else if (sh && sh.d && sh.d.op_id === op) sh.d.op_id = opId(); // 서버가 거절한 요청 번호는 다시 쓰지 않는다
+      if (onFail) onFail(e);
+      if (e.auth) { setTimeout(refresh, 0); return fail(e.message); }
+      if (!isNet(e)) loadCache().then(() => { if (!S.busy) render(); }).catch(() => {}); // 수량이 바뀌어 거절됐을 수 있으니 최신으로
+      return fail(isNet(e) ? (op ? '연결이 끊겨 저장됐는지 확인하지 못했습니다. 입력한 내용은 그대로 있으니 연결되면 다시 누르세요. 이미 저장됐다면 두 번 저장되지 않습니다.' : '연결이 끊겨 저장하지 못했습니다. 입력한 내용은 그대로 있으니 연결되면 다시 누르세요.') : e.message);
+    }
+    S.already = true; r = true;
   }
+  if (op) { const p = pendGet(); if (p && p.op === op) pendSet(null); }
   if (reload) { try { await loadCache(); } catch { /* 저장은 끝남. 목록은 다음 새로 고침 때 맞춰진다 */ } }
-  if (!keepSheet) S.sheet = null;
+  if (!keepSheet && S.sheet === sh) S.sheet = null;
   S.busy = false; render();
-  if (okMsg) toast(typeof okMsg === 'function' ? okMsg(r) : okMsg);
+  if (S.already) note('앞에서 누른 저장이 이미 되어 있었습니다. 두 번 저장하지 않았습니다.');
+  else if (okMsg) toast(typeof okMsg === 'function' ? okMsg(r) : okMsg);
   onEnterRoute();
   return r ?? true;
 }
@@ -1366,7 +1460,13 @@ document.addEventListener('click', e => {
 });
 document.addEventListener('input', e => {
   const el = e.target;
-  if (el.dataset.bind && S.sheet) { S.sheet.d[el.dataset.bind] = el.type === 'checkbox' ? el.checked : el.value; if (el.dataset.live !== undefined) updateSheetPart(); }
+  if (el.dataset.bind && S.sheet) {
+    S.sheet.d[el.dataset.bind] = el.type === 'checkbox' ? el.checked : el.value;
+    if (el.dataset.live !== undefined) updateSheetPart();
+    if (el.dataset.bind === 'qty') updateOkLabel(); // 수량을 직접 쳐도 「출고 5개」 버튼 글자가 따라 바뀐다
+    if (S.sheet.type === 'cart' && /^cq_/.test(el.dataset.bind)) cartSync(); // 담은 자재 수량은 치는 대로 저장
+  }
+  if (el.dataset.ordq) { const r = orderRows().find(x => x.id === el.dataset.ordq); if (r) { r.qty = isInt(el.value) ? +el.value : 0; orderSave(); } }
   if (el.id === 'q-items') { S.q = el.value; searchItems(); }
   if (el.id === 'q-docs') { S.docsQ = el.value; searchDocs(); }
   if (el.id === 'bulk-in' && S.bulk) S.bulk.text = el.value;
@@ -1374,7 +1474,7 @@ document.addEventListener('input', e => {
   if (el.id === 'q-sites') { S.sitesQ = el.value; clearTimeout(hT); hT = setTimeout(updatePane, 120); }
   if (el.id === 'q-cnt') { S.cntQ = el.value; clearTimeout(hT); hT = setTimeout(() => { const b = $('#cnt-add'); if (b) b.innerHTML = countAddList(); }, 120); }
   if (el.id === 'q-ord') { S.ordQ = el.value; clearTimeout(hT); hT = setTimeout(() => { const b = $('#ord-add'); if (b) b.innerHTML = orderAddList(); }, 120); }
-  if (el.dataset.cnt) { const loc = route().node; const c = countState(loc); c.vals[el.dataset.cnt] = el.value; countSaveLocal(); const row = el.closest('.crow'); if (row) { const cur = qtyAt(el.dataset.cnt, loc); const ch = isInt(el.value) && +el.value !== cur; row.classList.toggle('chg', ch); row.classList.toggle('bad', el.value.trim() !== '' && !isInt(el.value)); const t = row.querySelector('.was'); if (t) t.textContent = ch ? `기록 ${cur} → ${+el.value}` : `기록 ${cur}`; } updateCountBar(); }
+  if (el.dataset.cnt) { const loc = route().node; const c = countState(loc); c.vals[el.dataset.cnt] = el.value; c.at = Date.now(); countSaveLocal(); const row = el.closest('.crow'); if (row) { const cur = qtyAt(el.dataset.cnt, loc); const ch = isInt(el.value) && +el.value !== cur; row.classList.toggle('chg', ch); row.classList.toggle('bad', el.value.trim() !== '' && !isInt(el.value)); const t = row.querySelector('.was'); if (t) t.textContent = ch ? `기록 ${cur} → ${+el.value}` : `기록 ${cur}`; } updateCountBar(); }
 });
 let hT;
 /* 자료 즐겨찾기 · 최근 본 자료 (이 기기에 저장) */
@@ -1397,18 +1497,36 @@ document.addEventListener('keydown', e => {
 });
 window.addEventListener('online', () => { render(); if (S.waitOnline) { S.waitOnline = false; connect(); } else if (S.user) refresh(); });
 window.addEventListener('offline', () => render());
-document.addEventListener('visibilitychange', () => { if (!document.hidden && S.user && online() && !S.waitOnline) refresh(); });
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden) { stopScan(); return; } // 다른 앱으로 가면 카메라를 끈다
+  if (S.user && route().view === 'scan') startScan();
+  if (S.user && online() && !S.waitOnline) { refresh(); checkVersion(); }
+});
+
+/* 새 버전 알림: 폰에서 앱을 며칠씩 켜 두어도 새 버전이 올라오면 위에 띠를 띄운다 */
+let verChecked = 0;
+async function checkVersion(force = false) {
+  if (DEMO || !online() || (!force && Date.now() - verChecked < 10 * 60000)) return; verChecked = Date.now();
+  try {
+    const t = await fetchT('index.html?vc=' + Date.now(), { cache: 'no-store' }, 8000).then(r => r.ok ? r.text() : '');
+    const m = /app\.js\?v=([0-9a-f]{8})/.exec(t);
+    if (m && m[1] !== APP_VER && S.newVer !== m[1]) { S.newVer = m[1]; render(); }
+  } catch {}
+}
 
 /* 다른 곳에서 바뀐 내용 받기. 계정이 중지·삭제되었거나 권한이 바뀌었으면 바로 반영한다 */
+let refreshing = false;
 async function refresh() {
   if (S.fromCache) return connect(); // 아직 서버에서 로그인 확인을 못 한 상태 → 확인부터
+  if (refreshing) return; refreshing = true; // 겹쳐 돌지 않게
   try {
     const u = await S.api.whoami();
     if (u === undefined) return; // 로그인 상태를 확인하지 못함(연결 문제 등) → 아무것도 바꾸지 않는다
-    if (u === null || u.status !== 'active') { await ACT.logout(); toast('계정 사용이 중지되었거나 승인이 취소되었습니다. 관리자에게 문의하세요.', true); return; }
+    if (u === 'expired') { await doLogout(); toast('로그인이 풀렸습니다. 다시 로그인해 주세요. 담아 둔 자재와 실사하던 수량은 그대로 있습니다.', true); return; }
+    if (u === null || u.status !== 'active') { await doLogout(); toast('계정 사용이 중지되었거나 승인이 취소되었습니다. 관리자에게 문의하세요.', true); return; }
     if (u.role !== S.user.role || u.name !== S.user.name) { S.user = { ...S.user, ...u }; store.set('gaya-user', S.user); }
-    await loadCache(); S.serverDown = false; render(); onEnterRoute(); offPrune();
-  } catch {}
+    await loadCache(); S.serverDown = false; if (!S.busy) render(); onEnterRoute(); offPrune(); resolvePending();
+  } catch {} finally { refreshing = false; }
 }
 
 /* ───────── 검색: 결과 칸(#pane)만 바꿔 그려 입력 중인 칸을 건드리지 않는다 (한글 조합이 깨지지 않게) ───────── */
@@ -1418,7 +1536,7 @@ function searchItems(now) {
   const go = async () => {
     const q = S.q.trim(); const seq = ++sSeq;
     if (!q) S.searchRes = null;
-    else { const res = await S.api.search(q).catch(() => ({ items: [] })); if (seq !== sSeq || q !== S.q.trim()) return; S.searchRes = res.items; }
+    else { const lq = q.toLowerCase(); S.searchRes = S.cache.items.filter(i => smatch([i.name, i.spec, i.maker, i.models, i.memo].join(' '), lq)).map(i => i.id); if (seq !== sSeq) return; } // 자재 검색은 폰 안에서 바로 (서버를 기다리지 않음)
     updatePane();
   };
   if (now) go(); else sT = setTimeout(go, 150);
@@ -1517,7 +1635,7 @@ function shell() {
   const out = v(r);
   const tabs = [['items', 'box', '자재'], ['docs', 'docs', '자료'], ['scan', 'scan', '스캔'], ['alerts', 'bell', '알림'], ['more', 'more', '더보기']];
   const isRoot = S.stack.length === 1;
-  return `${S.serverDown && online() ? `<div class="offline down" role="status">${ic('warn')}<span>서버에 연결되지 않아 마지막으로 받은 내용만 보입니다.</span></div>` : ''}${online() ? '' : `<div class="offline" role="status">${ic('wifioff')}<span>오프라인 · 마지막으로 받은 내용만 보입니다. 저장은 연결된 뒤에 됩니다.</span></div>`}
+  return `${S.newVer ? `<div class="offline newver" role="status">${ic('restore')}<span>앱 새 버전이 나왔습니다.</span><button class="btn sm" data-act="reloadApp">지금 바꾸기</button></div>` : ''}${S.serverDown && online() ? `<div class="offline down" role="status">${ic('warn')}<span>서버에 연결되지 않아 마지막으로 받은 내용만 보입니다.</span></div>` : ''}${online() ? '' : `<div class="offline" role="status">${ic('wifioff')}<span>오프라인 · 마지막으로 받은 내용만 보입니다. 저장은 연결된 뒤에 됩니다.</span></div>`}
   ${DEMO ? `<div class="demo-strip"><b>체험판</b><span>예시 데이터 · 이 기기에만 저장됩니다</span></div>` : ''}
   <header class="appbar"><div class="appbar-top">
     ${isRoot ? logo('logo', true) : `<button class="iconbtn" data-act="back" aria-label="뒤로">${ic('back')}</button>`}
@@ -1533,8 +1651,12 @@ const lowChip = it => isLow(it) ? `<span class="chip crit">부족 · 최소 ${it
 const searchBox = (id, val, ph, label) => `<div class="search">${ic('search')}<input id="${id}" type="search" enterkeyhint="search" placeholder="${ph}" value="${esc(val)}" aria-label="${label}" autocomplete="off"></div>`;
 
 /* 품목 목록: 같은 품명이 여러 사양이면 묶음 머리를 달아 준다 */
+/* 품목 사진 작은 그림: 올릴 때 만든 작은 사진(_t)을 먼저, 없으면 원래 사진, 그것도 안 되면 그림 자리만 */
+const thumbUrl = u => String(u || '').replace(/\.jpg(\?.*)?$/i, '_t.jpg$1');
+const thumb = it => it.photo ? `<span class="thumb"><img src="${esc(/^data:/.test(it.photo) ? it.photo : thumbUrl(it.photo))}" data-full="${esc(it.photo)}" alt="" loading="lazy" decoding="async" onerror="if(this.dataset.full&&this.src!==this.dataset.full){this.src=this.dataset.full;this.dataset.full=''}else{this.remove()}"></span>` : `<span class="thumb none">${ic('box')}</span>`;
 function itemList(items, qtyOf, sub, outLoc) {
   if (!items.length) return '';
+  const pics = items.some(it => it.photo); // 사진이 하나라도 있는 목록이면 줄마다 사진 자리를 둔다
   const groups = new Map();
   items.slice().sort((a, b) => a.name.localeCompare(b.name, 'ko') || (a.spec || '').localeCompare(b.spec || '', 'ko', { numeric: true })).forEach(it => { if (!groups.has(it.name)) groups.set(it.name, []); groups.get(it.name).push(it); });
   let h = '';
@@ -1543,7 +1665,7 @@ function itemList(items, qtyOf, sub, outLoc) {
     if (grouped) h += `<div class="group-h"><span>${esc(name)}</span><span>${arr.length}종</span></div>`;
     arr.forEach(it => {
       const q = qtyOf(it);
-      const inner = `<div class="main"><span class="t">${esc(grouped ? (it.spec || '(규격 없음)') : itemTitle(it))}</span><span class="s">${esc([it.maker, it.models].filter(Boolean).join(' · ') || ' ')}</span>${sub ? sub(it) : ''}</div>
+      const inner = `${pics ? thumb(it) : ''}<div class="main"><span class="t">${esc(grouped ? (it.spec || '(규격 없음)') : itemTitle(it))}</span><span class="s">${esc([it.maker, it.models].filter(Boolean).join(' · ') || ' ')}</span>${sub ? sub(it) : ''}</div>
         <div class="end"><span class="qty ${isLow(it) ? 'low' : ''}">${q}<small>${esc(it.unit)}</small></span>${lowChip(it)}</div>`;
       h += outLoc
         ? `<div class="lrow irow"><button class="hit" data-act="item" data-id="${it.id}">${inner}</button><button class="btn sm outbtn" data-act="outHere" data-id="${it.id}" data-loc="${outLoc}" data-write ${q ? '' : 'disabled'}>${ic('out')}꺼내기</button></div>`
@@ -1717,6 +1839,7 @@ VIEW['items.count'] = r => {
     return `<div class="crow ${ch ? 'chg' : ''} ${String(v).trim() !== '' && !isInt(v) ? 'bad' : ''}"><div class="main"><span class="t">${esc(itemTitle(it))}</span><span class="s was">${ch ? `기록 ${cur} → ${+v}` : `기록 ${cur}`}</span></div>
       <div class="ministep big"><button type="button" data-act="cntStep" data-id="${id}" data-d="-1" aria-label="하나 빼기">−</button><input id="cnt-${id}" data-cnt="${id}" data-nokeep inputmode="numeric" value="${esc(v)}" placeholder="${cur}" aria-label="${esc(itemTitle(it))} 실제 수량" autocomplete="off"><button type="button" data-act="cntStep" data-id="${id}" data-d="1" aria-label="하나 더하기">+</button></div><span class="unit">${esc(it.unit)}</span></div>`; }).join('');
   const body = `<section class="hero" style="flex-direction:row;gap:12px;align-items:center">${l.code ? `<span class="tape lg">${esc(l.code)}</span>` : ''}<span class="muted" style="font-size:13.5px;flex:1;min-width:0">${esc(locPathText(l.id))}</span></section>
+    ${Object.values(c.vals).some(v => String(v).trim() !== '') && c.at && Date.now() - c.at > 6 * 36e5 ? `<div class="notice warn">${ic('clock')}<span>이 폰에 <b>${fmtWhen(new Date(c.at).toISOString())}</b>에 적어 둔 수량이 남아 있습니다. 그 뒤로 입출고가 있었다면 「처음대로」를 누르고 다시 세세요.</span></div>` : ''}
     <div class="notice">${ic('info')}<span>선반에 <b>실제로 있는 수량</b>을 세어 적으세요. 비워 둔 칸은 그대로 두고, 바뀐 품목만 「수량 정정(실사)」으로 저장됩니다. 적던 수량은 저장 전까지 이 폰에 남아 있습니다.</span></div>
     <section class="sec"><div class="sec-h"><h2>이 위치의 품목</h2><span class="aside">${ids.length}가지</span></div><div class="ledger countlist">${rows || empty('box', '이 위치에 등록된 품목이 없습니다.', '아래에서 품목을 찾아 넣으세요.')}</div></section>
     <section class="sec"><div class="sec-h"><h2>다른 품목 넣기</h2><button class="btn sm" data-act="cntNewItem" data-write>${ic('plus')}새 품목 등록</button></div>
@@ -1739,7 +1862,7 @@ VIEW['items.order'] = () => {
   const on = rows.filter(r => r.on && r.qty > 0).length;
   const body = `<div class="notice">${ic('info')}<span>재고 부족 품목을 <b>최소 재고까지 채우는 수량</b>으로 미리 적어 두었습니다. 수량을 고치거나 체크를 빼고 「보내기」를 누르면 제조사별로 묶은 글이 카톡·문자로 보내집니다. 자재가 들어오면 <b>「한 번에 입고」</b>로 체크한 품목을 한꺼번에 넣으세요. (지금 ${on}품목 체크)</span></div>
     ${[...groups].map(([k, rs]) => `<section class="sec"><div class="sec-h"><h2>${esc(k)}</h2><span class="aside">${rs.length}품목</span></div><div class="ledger">${rs.map(r => { const it = S.ix.item.get(r.id); return `<label class="crow ${r.on ? '' : 'off'}"><input type="checkbox" data-act="ordToggle" data-id="${r.id}" ${r.on ? 'checked' : ''} aria-label="포함"><div class="main"><span class="t">${esc(itemTitle(it))}</span><span class="s">지금 ${total(it.id)} · 최소 ${it.min_qty}${esc(it.unit)}${r.low ? '' : ' · 직접 넣음'}</span></div>
-      <div class="ministep"><button type="button" data-act="ordStep" data-id="${r.id}" data-d="-1" aria-label="하나 빼기">−</button><output>${r.qty}</output><button type="button" data-act="ordStep" data-id="${r.id}" data-d="1" aria-label="하나 더하기">+</button></div>${r.low ? '' : `<button type="button" class="iconbtn" data-act="ordDel" data-id="${r.id}" aria-label="빼기">${ic('x')}</button>`}</label>`; }).join('')}</div></section>`).join('') || `<div class="ledger">${empty('check', '재고가 부족한 품목이 없습니다.', '아래에서 발주할 품목을 직접 찾아 넣을 수 있습니다.')}</div>`}
+      <div class="ministep"><button type="button" data-act="ordStep" data-id="${r.id}" data-d="-1" aria-label="하나 빼기">−</button><input id="oq-${r.id}" data-ordq="${r.id}" data-nokeep inputmode="numeric" value="${r.qty}" aria-label="발주 수량" autocomplete="off"><button type="button" data-act="ordStep" data-id="${r.id}" data-d="1" aria-label="하나 더하기">+</button></div>${r.low ? '' : `<button type="button" class="iconbtn" data-act="ordDel" data-id="${r.id}" aria-label="빼기">${ic('x')}</button>`}</label>`; }).join('')}</div></section>`).join('') || `<div class="ledger">${empty('check', '재고가 부족한 품목이 없습니다.', '아래에서 발주할 품목을 직접 찾아 넣을 수 있습니다.')}</div>`}
     <section class="sec"><div class="sec-h"><h2>다른 품목 넣기</h2></div>${searchBox('q-ord', S.ordQ || '', '품명·규격 검색 (초성도 됨)', '발주할 품목 검색')}<div id="ord-add">${orderAddList()}</div></section>`;
   const bar = `<div class="countbar ordbar"><button class="btn ghost" data-act="ordCsv" aria-label="엑셀로 받기">${ic('download')}엑셀</button><button class="btn" data-act="ordShare">${ic('share')}보내기</button><button class="btn in" data-act="ordIn" data-write>${ic('in')}한 번에 입고</button></div>`;
   return { title: '발주·입고', crumbs: crumbs([{ label: '자재', act: 'locRoot' }, { label: '발주·입고' }]), body, bar, actions: `<button class="btn sm" data-act="ordReset">다시 채우기</button>` };
@@ -1766,7 +1889,7 @@ VIEW['items.item'] = r => {
   const d = vd(); const rows = (S.ix.byItem.get(it.id) || []).slice().sort((a, b) => b.qty - a.qty);
   const adm = can(S.user, 'item');
   const catP = it.category_id ? pathOf(S.ix.cat, it.category_id) : [];
-  const cr = crumbs([{ label: '자재', act: 'catRoot' }, ...catP.map(p => ({ label: p.name, act: 'cat', data: { id: p.id } })), { label: it.name }]);
+  const cr = crumbs([{ label: '자재', act: 'locRoot' }, ...catP.map(p => ({ label: p.name, act: 'cat', data: { id: p.id } })), { label: it.name }]);
   const t = total(it.id); const u = esc(it.unit);
   const body = `<section class="hero">
       <div class="hero-top"><button class="photo" data-act="photoItem" data-id="${it.id}" aria-label="사진 바꾸기" style="padding:0">${it.photo ? `<img src="${esc(it.photo)}" alt="">` : ic('cam')}</button>
@@ -1836,6 +1959,7 @@ VIEW['docs.mine'] = r => {
   const cr = f ? crumbs([{ label: '내 저장함', act: 'myOpen', data: { id: '' } }, ...myPath(md, fid).map(p => ({ label: p.name, act: 'myOpen', data: { id: p.id } }))]) : null;
   const body = `${f ? '' : docSeg('mine')}
     ${!all.length ? `<div class="notice">${ic('info')}<span>자료를 열고 오른쪽 위 <b>☆</b>를 누르면 여기에 모이고 <b>폰에도 저장</b>됩니다. 전파가 약한 기계실·피트에서도 열립니다. 폴더를 만들어 내 마음대로 정리하세요. (이 휴대폰에만 저장)</span></div>` : ''}
+    ${all.length && isIOS() && !isStandalone() ? `<div class="notice warn">${ic('warn')}<span><b>아이폰 사파리에서 쓰는 중입니다.</b> 사파리는 7일 넘게 이 앱을 열지 않으면 폰에 저장한 자료를 지울 수 있습니다. <b>홈 화면에 앱을 추가</b>해 아이콘으로 쓰면 지워지지 않습니다.</span><button class="btn sm" data-act="install">추가 방법</button></div>` : ''}
     ${notSaved.length && online() ? `<div class="notice warn">${ic('warn')}<span>아직 폰에 없는 자료가 ${notSaved.length}개 있습니다.</span><button class="btn sm" data-act="mySaveAll">모두 폰에 저장</button></div>` : ''}
     <div class="toolbar"><button class="btn sm" data-act="myMkdir">${ic('folderPlus')}폴더 만들기</button>${f ? `<span class="grow"></span><button class="btn sm ghost" data-act="myRename" data-id="${f.id}">${ic('edit')}이름 바꾸기</button><button class="btn sm ghost danger" data-act="myDelFolder" data-id="${f.id}">${ic('trash')}폴더 지우기</button>` : ''}</div>
     ${kids.length ? `<section class="sec"><div class="sec-h"><h2>내 폴더</h2></div><div class="ledger">${kids.map(k => { const n = myDocsIn(md, k.id).length, m = myKids(md, k.id).length;
@@ -1878,7 +2002,8 @@ VIEW['docs.doc'] = r => {
 /* ───────── 스캔 ───────── */
 VIEW['scan.scan'] = () => {
   const units = S.cache.locations.filter(l => l.code && l.kind !== 'zone');
-  return { title: 'QR 스캔', body: `<div class="scanbox" id="scanbox"><video id="scanvid" playsinline muted hidden></video><div class="frame"></div><div class="msg" id="scanmsg">카메라를 켜는 중…</div></div>
+  return { title: 'QR 스캔', body: `<div class="scanbox" id="scanbox"><video id="scanvid" playsinline muted hidden></video><div class="frame"></div><div class="msg" id="scanmsg">${esc(S.scanMsg || '카메라를 켜는 중…')}</div></div>
+    ${S.scanErr && !DEMO ? `<button class="btn block" data-act="scanRetry">${ic('scan')}카메라 다시 켜기</button>` : ''}
     <p class="muted" style="margin:0;font-size:13.5px">캐비넷·선반에 붙은 QR 라벨을 네모 안에 맞추면 그 위치의 자재가 바로 열립니다.</p>
     <form class="toolbar" data-submit="codeGo"><div class="search grow">${ic('tag')}<input id="code-in" name="code" placeholder="라벨 코드 직접 입력 (예: WH-S1-상)" autocapitalize="characters" autocomplete="off" enterkeyhint="go" aria-label="라벨 코드"></div><button class="btn primary" style="min-height:50px">열기</button></form>
     ${DEMO ? `<section class="sec"><div class="sec-h"><h2>체험판 · 라벨 골라서 스캔 흉내</h2></div><div class="ledger">${units.map(l => `<button class="lrow" data-act="loc" data-id="${l.id}"><span class="tape">${esc(l.code)}</span><div class="main"><span class="s">${esc(locPathText(l.id))}</span></div><span class="chev">${ic('chev')}</span></button>`).join('')}</div></section>` : ''}` };
@@ -2049,15 +2174,19 @@ VIEW['more.trash'] = () => {
 VIEW['more.guide'] = () => {
   const adm = can(S.user, 'users');
   const body = `<article class="guide hero" style="gap:6px">
-    <h3>자재 쓰는 법</h3><ol><li>가운데 <b>스캔</b>으로 선반 QR을 찍으면 그 선반의 자재가 열립니다. 쓸 자재 옆 <b>꺼내기</b>를 누르고 수량·현장만 맞추면 출고가 끝납니다.</li><li>자재 탭 검색창이나 위치별·분류별 목록으로 찾아 품목을 열고 <b>출고</b>를 눌러도 됩니다. 자주 쓰는 품목은 자재 첫 화면 「내가 자주 쓰는 품목」에 저절로 모입니다.</li><li>저장 직후 아래에 뜨는 <b>되돌리기</b>를 누르면 방금 기록이 취소됩니다.</li><li>꺼냈다가 안 쓰고 돌려놓으면 기록 옆의 <b>출고 취소 (안 씀)</b>를 누릅니다. 수량이 원래대로 돌아갑니다. 본인 기록은 7일 안에 취소할 수 있고, 그 뒤에는 관리자가 합니다.</li><li>새로 들어온 자재는 <b>입고</b>, 다른 캐비넷으로 옮길 때는 <b>이동</b>입니다.</li><li>지난 기록은 자재 첫 화면 위쪽 <b>입출고 기록</b>에서 달별로 보고, 현장 이름·품명·사람으로 찾을 수 있습니다.</li></ol>
+    <h3>자재 쓰는 법</h3><ol><li>가운데 <b>스캔</b>으로 선반 QR을 찍으면 그 선반의 자재가 열립니다. 쓸 자재 옆 <b>꺼내기</b>를 누르고 수량·현장만 맞추면 출고가 끝납니다.</li><li>자재 탭 검색창이나 위치별·분류별 목록으로 찾아 품목을 열고 <b>출고</b>를 눌러도 됩니다. 자주 쓰는 품목은 자재 첫 화면 「내가 자주 쓰는 품목」에 저절로 모입니다.</li><li>저장 직후 아래에 뜨는 <b>되돌리기</b>를 누르면 방금 기록이 취소됩니다.</li><li>꺼냈다가 안 쓰고 돌려놓으면 기록 옆의 <b>출고 취소 (안 씀)</b>를 누릅니다. 수량이 원래대로 돌아갑니다. 본인 기록은 7일 안에 취소할 수 있고, 그 뒤에는 관리자가 합니다.</li><li>새로 들어온 자재는 <b>입고</b>, 다른 캐비넷으로 옮길 때는 <b>이동</b>입니다.</li><li>지난 기록은 자재 첫 화면 위쪽 <b>입출고 기록</b>에서 달별로 보고, 현장 이름·품명·사람으로 찾을 수 있습니다.</li><li>여러 자재를 꺼낼 때는 품목마다 <b>담기</b>를 누르고, 아래 띠의 <b>한 번에 출고</b>에서 현장을 한 번만 적습니다.</li></ol>
+    <h3>전파가 약할 때</h3><ol><li>오프라인이어도 받아 둔 목록은 그대로 보입니다. 저장(입고·출고 등)은 연결된 뒤에 됩니다.</li><li>저장 중에 연결이 끊겨 <b>「저장됐는지 확인하지 못했습니다」</b>가 뜨면, 연결된 뒤 같은 버튼을 한 번 더 누르세요. 앱이 서버에 먼저 물어보고, 이미 저장됐으면 <b>두 번 저장하지 않습니다.</b></li><li>앞서 끊겼던 저장이 됐는지는 연결이 돌아오면 앱이 알려 줍니다.</li></ol>
     <h3>자료 쓰는 법</h3><ol><li>자료 탭에서 폴더를 열고 <b>올리기</b>로 PDF·엑셀·사진을 그대로 올립니다.</li><li>검색창에 에러코드나 부품명을 치면 파일 안의 글자까지 찾아 줍니다.</li><li>교육 영상은 유튜브에 「일부 공개」로 올린 뒤 <b>영상·링크</b>로 주소만 등록합니다.</li><li>자주 보는 자료는 파일 화면 오른쪽 위 <b>☆</b>를 누르면 자료 탭의 <b>「내 저장함」</b>에 모이고 폰에도 저장됩니다. 전파가 없는 기계실·피트에서도 열리고, 내 폴더를 만들어 정리할 수 있습니다(이 휴대폰에만 저장).</li><li>지난 입출고는 자재 첫 화면 위쪽 바로가기 <b>「입출고 기록」</b>에서, 현장마다 쓴 자재는 <b>「현장별 이력」</b>에서 봅니다.</li></ol>
     ${adm ? `<h3>가입 승인과 퇴사자</h3><ol><li>더보기 › 직원 관리에서 이름·사내번호를 확인하고 승인합니다.</li><li>비밀번호를 잊은 직원은 이름을 눌러 <b>비밀번호 초기화</b> → 화면에 뜬 임시 번호를 알려 주고, 로그인 뒤 본인이 바꾸게 합니다.</li><li>퇴사자는 지우지 않고 <b>사용 중지</b>합니다. 그 사람이 남긴 입출고 기록은 그대로 남습니다.</li></ol>
-    <h3>위치 추가와 QR 라벨</h3><ol><li>더보기 › 위치 관리에서 캐비넷·선반을 추가하고 짧은 코드(예: WH-S5)를 붙입니다.</li><li>QR 라벨 만들기 → 인쇄 → 선반에 붙입니다. 앱의 <b>스캔</b> 탭으로 찍으면 그 선반 화면이 바로 열립니다. (안드로이드는 폰 기본 카메라로 찍어도 열립니다. 아이폰은 기본 카메라로 찍으면 사파리에서 열려 로그인을 따로 해야 하니 앱의 스캔 탭을 쓰세요.)</li></ol>
+    <h3>처음 입력하는 순서</h3><ol><li>더보기 › 위치 관리 › <b>한 번에 만들기</b>: 구역 › 캐비넷·선반 번호 범위 › 칸을 고르면 QR 코드까지 한꺼번에 생기고, 바로 라벨 인쇄 화면으로 갑니다.</li><li>더보기 › <b>품목 대량 등록</b>: 「빈 양식 받기」로 받은 엑셀에 채워 붙여 넣습니다. 위치 코드와 수량을 적으면 입고 기록까지 함께 남습니다.</li><li>선반마다 실제 수량을 맞출 때는 그 선반 화면의 <b>실사</b>를 누르고 세어 적습니다. 다 적으면 「다음 선반」 → QR을 찍으면 바로 다음 실사 화면입니다. 적던 수량은 저장 전까지 이 폰에 남습니다.</li></ol>
+    <h3>위치 추가와 QR 라벨</h3><ol><li>더보기 › 위치 관리에서 캐비넷·선반을 추가하고 짧은 코드(예: WH-S5)를 붙입니다. 코드에는 빈칸을 넣지 않습니다.</li><li>QR 라벨 만들기 → 인쇄 → 선반에 붙입니다. 앱의 <b>스캔</b> 탭으로 찍으면 그 선반 화면이 바로 열립니다. (안드로이드는 폰 기본 카메라로 찍어도 열립니다. 아이폰은 기본 카메라로 찍으면 사파리에서 열려 로그인을 따로 해야 하니 앱의 스캔 탭을 쓰세요.)</li></ol>
     <h3>빨간 불이 켜졌을 때 (시스템 상태)</h3><ol><li>직원들이 앱을 평소처럼 쓰고 있다면 급한 일은 아닙니다. 앱을 쓰는 것만으로도 서버는 깨어 있습니다.</li><li>회사용 구글 계정(gaya.elevator.app)에 로그인해 보안 경고나 계정 잠김 안내가 있는지 봅니다.</li><li>그래도 계속 빨간 불이면 개발자(재석)에게 연락합니다.</li><li>앱이 아예 열리지 않고 「서버가 쉬고 있습니다」라고 나오면: supabase.com 에 소유자 계정으로 로그인 → 가야엘리베이터 조직 › gaya-app 프로젝트 → <b>Resume project</b> 를 누르고 몇 분 기다립니다. 멈춘 뒤 1년 안이면 데이터는 그대로입니다.</li></ol>
     <h3>재고 부족 알리기와 기록 받기</h3><ol><li>자재 첫 화면 「재고 부족」의 <b>목록 보내기</b>를 누르면 부족한 품목 목록을 카톡 등으로 바로 보낼 수 있습니다.</li><li>입출고 기록 화면 오른쪽 위 <b>엑셀</b>을 누르면 그 달 기록(검색·종류로 거른 그대로)이 엑셀 파일로 받아집니다.</li><li>자재 첫 화면 바로가기 <b>「발주·입고」</b>: 부족한 만큼 미리 채운 발주 목록을 거래처에 보내고, 자재가 들어오면 「한 번에 입고」로 체크한 품목을 위치별로 한꺼번에 넣습니다.</li></ol>
+    <h3>최소 재고 정하기 · 직원 안내문</h3><ol><li>더보기 › <b>사용 통계</b>: 많이 나간 자재와 현장별 사용량을 달마다 봅니다. 아래 「최소 재고 추천」은 최근 3개월 한 달 평균만큼을 권합니다. 체크한 것만 반영됩니다.</li><li>더보기 › <b>직원 안내문 인쇄</b>: 앱 주소 QR과 쓰는 법이 든 A4 한 장입니다. 새 직원에게는 「앱 주소 보내기」로 카톡 링크를 보내면 됩니다.</li></ol>
     <h3>저장 용량 80% 경고</h3><p>개발자(재석)에게 연락합니다. 구글 원 구독(100GB 월 2,400원) 또는 무료 구글 계정 추가 중에서 고르면 되고, 어느 쪽이든 앱은 그대로 씁니다.</p>
     <h3>매년 1월에 할 일</h3><p>회사용 구글 계정(gaya.elevator.app)에 한 번 로그인해 드라이브의 「가야앱 백업」 폴더를 열어 봅니다. 구글은 2년 동안 쓰지 않은 계정을 지우기 때문에, 사람이 1년에 한 번 들어가 두는 것입니다.</p>
-    <h3>앱이 업데이트되면</h3><p>개발자가 고친 내용은 올리는 즉시 반영됩니다. 직원 폰에서 예전 화면이 보이면 앱을 완전히 닫았다가 다시 열면 됩니다.</p>` : ''}
+    <h3>앱이 업데이트되면</h3><p>새 버전이 올라오면 앱 맨 위에 <b>「앱 새 버전이 나왔습니다 · 지금 바꾸기」</b> 띠가 뜹니다. 누르면 바로 바뀝니다. 띠가 안 보여도 앱을 완전히 닫았다가 다시 열면 새 버전이 됩니다.</p>
+    <h3>계정과 인계</h3><p>회사용 구글 계정·GitHub·Supabase 같은 계정 정보와 해마다 할 일, 문제가 생겼을 때의 순서는 개발자가 남긴 <b>인계 문서</b>에 모아 두었습니다. 비밀번호는 문서에 적지 않으니 따로 받아 두세요.</p>` : ''}
   </article>`;
   return { title: adm ? '관리자 안내' : '사용 안내', crumbs: moreCr(adm ? '관리자 안내' : '사용 안내'), body };
 };
@@ -2144,6 +2273,12 @@ function inPickList(q) {
   const list = S.cache.items.filter(i => !q || smatch([i.name, i.spec, i.maker, i.models].join(' '), q)).slice(0, 60);
   return list.map(i => `<button type="button" class="pick" data-act="pick" data-k="item_id" data-v="${i.id}"><div class="main"><span>${esc(itemTitle(i))}</span><span class="s">${esc(i.maker || '')}</span></div><span class="qty">${total(i.id)}<small>${esc(i.unit)}</small></span></button>`).join('') || `<div class="empty">찾는 품목이 없습니다. 새 품목은 관리자가 등록합니다.</div>`;
 }
+/* 수량을 직접 쳤을 때 아래 버튼 글자(「출고 5개」)만 바꾼다 — 화면 전체를 다시 그리면 폰 자판이 닫힐 수 있다 */
+function updateOkLabel() {
+  const s = S.sheet; if (!s || S.busy) return; const L = { in: '입고 ', out: '출고 ', move: '이동 ' }[s.type]; if (!L) return;
+  const b = $('.sheet [data-act="sheetOk"]'); if (!b) return;
+  const it = s.d.item_id ? S.ix.item.get(s.d.item_id) : null; b.textContent = L + (isInt(s.d.qty) ? +s.d.qty : 0) + (it ? it.unit : '개');
+}
 function updateSheetPart() {
   if (!S.sheet) return render();
   const t = S.sheet.type, el = t === 'in' ? $('#iq-list') : t === 'locBulk' ? $('#lb-prev') : null;
@@ -2152,7 +2287,7 @@ function updateSheetPart() {
 }
 /* 현장 + 동 + 호기 칸 (출고·한 번에 출고 공용) */
 function siteFields(d) {
-  return `<div class="field"><label for="sh-site">현장 (선택)</label><div class="siterow"><input id="sh-site" data-bind="site" list="sites" value="${esc(d.site || '')}" placeholder="예: 한빛아파트" autocomplete="off" enterkeyhint="next"><div class="unitin"><input id="sh-dong" data-bind="dong" value="${esc(d.dong || '')}" inputmode="numeric" placeholder="103" autocomplete="off" enterkeyhint="next" aria-label="동"><span>동</span></div><div class="unitin ho"><input id="sh-ho" data-bind="ho" value="${esc(d.ho || '')}" inputmode="numeric" placeholder="2" autocomplete="off" enterkeyhint="done" aria-label="호기"><span>호기</span></div></div>
+  return `<div class="field"><label for="sh-site">현장 (선택)</label><div class="siterow"><input id="sh-site" maxlength="60" data-bind="site" list="sites" value="${esc(d.site || '')}" placeholder="예: 한빛아파트" autocomplete="off" enterkeyhint="next"><div class="unitin"><input id="sh-dong" maxlength="10" data-bind="dong" value="${esc(d.dong || '')}" inputmode="numeric" placeholder="103" autocomplete="off" enterkeyhint="next" aria-label="동"><span>동</span></div><div class="unitin ho"><input id="sh-ho" maxlength="10" data-bind="ho" value="${esc(d.ho || '')}" inputmode="numeric" placeholder="2" autocomplete="off" enterkeyhint="done" aria-label="호기"><span>호기</span></div></div>
     <datalist id="sites">${siteNames().map(x => `<option value="${esc(x)}">`).join('')}</datalist>
     ${(S.mySites || []).length ? `<div class="sitechips"><span>최근</span>${S.mySites.slice(0, 4).map(x => `<button type="button" class="fchip sm" data-act="pickSite" data-v="${esc(x)}">${esc(x)}</button>`).join('')}</div>` : ''}</div>`;
 }
@@ -2173,14 +2308,14 @@ function sheetView() {
       }
       h = sheetHead('입고', esc(itemTitle(it))) + `<div class="field"><span class="lab">넣을 위치</span>${locPicker('location_id', d.location_id, { qtyOf: stockAt })}</div>
         <div class="field"><span class="lab">수량 (${esc(unit)})</span>${stepper('qty', d.qty)}</div>
-        <div class="field"><label for="sh-note">메모 (선택)</label><input id="sh-note" data-bind="note" value="${esc(d.note || '')}" placeholder="예: 거래처 입고, 정기 발주분"></div>
+        <div class="field"><label for="sh-note">메모 (선택)</label><input id="sh-note" maxlength="200" data-bind="note" value="${esc(d.note || '')}" placeholder="예: 거래처 입고, 정기 발주분"></div>
         ${sheetErr()}${okBtn('입고 ' + qn + unit, 'in')}`;
       break;
     case 'out':
       h = sheetHead('출고', esc(itemTitle(it))) + `<div class="field"><span class="lab">꺼내는 위치</span>${d.quick && d.location_id ? `<div class="fixedloc"><span class="tape">${esc(locCode(d.location_id))}</span><span class="p">${esc(locPathText(d.location_id))}</span><button type="button" class="btn sm ghost" data-act="outFull">바꾸기</button></div>` : locPicker('location_id', d.location_id, { onlyWith: withStock(), qtyOf: stockAt })}</div>
         <div class="field"><span class="lab">수량 (${esc(unit)})${d.location_id ? ' · 이 위치에 ' + stockAt(d.location_id) + esc(unit) : ''}</span>${stepper('qty', d.qty)}</div>
         ${siteFields(d)}
-        <div class="field"><label for="sh-note">메모 (선택)</label><input id="sh-note" data-bind="note" value="${esc(d.note || '')}"></div>
+        <div class="field"><label for="sh-note">메모 (선택)</label><input id="sh-note" maxlength="200" data-bind="note" value="${esc(d.note || '')}"></div>
         ${sheetErr()}${cart().length ? `<div class="notice">${ic('box')}<span>담은 자재 <b>${cart().length}가지</b>가 있습니다. 이것도 「담기」 하면 현장을 한 번만 적고 한 번에 출고합니다.</span></div>` : ''}
         <div class="outbtns"><button class="btn big" data-act="cartAdd" data-write ${S.busy ? 'disabled' : ''}>${ic('plus')}담기</button>${okBtn('출고 ' + qn + unit, 'out')}</div>
         <p class="muted" style="margin:0;font-size:12.5px">여러 자재를 꺼낼 때는 「담기」로 모아 한 번에 출고하세요. 꺼냈다가 안 쓰면 기록에서 「출고 취소 (안 씀)」를 누르면 수량이 돌아옵니다.</p>`;
@@ -2189,55 +2324,55 @@ function sheetView() {
       h = sheetHead('이동', esc(itemTitle(it))) + `<div class="field"><span class="lab">보내는 위치</span>${locPicker('from', d.from, { onlyWith: withStock(), qtyOf: stockAt })}</div>
         <div class="field"><span class="lab">받는 위치</span>${locPicker('to', d.to, { qtyOf: stockAt, exclude: d.from })}</div>
         <div class="field"><span class="lab">수량 (${esc(unit)})${d.from ? ' · 보내는 위치에 ' + stockAt(d.from) + esc(unit) : ''}</span>${stepper('qty', d.qty)}</div>
-        <div class="field"><label for="sh-note">메모 (선택)</label><input id="sh-note" data-bind="note" value="${esc(d.note || '')}" placeholder="예: 당직 차량용"></div>
+        <div class="field"><label for="sh-note">메모 (선택)</label><input id="sh-note" maxlength="200" data-bind="note" value="${esc(d.note || '')}" placeholder="예: 당직 차량용"></div>
         ${sheetErr()}${okBtn('이동 ' + qn + unit)}`;
       break;
     case 'adjust':
       h = sheetHead('수량 정정', esc(itemTitle(it)) + ' · 실제로 세어 본 수량으로 맞춥니다') + `<div class="field"><span class="lab">위치</span>${locPicker('location_id', d.location_id, { qtyOf: stockAt })}</div>
         <div class="field"><span class="lab">실제 수량 (${esc(unit)}) · 지금 기록 ${stockAt(d.location_id)}${esc(unit)}</span>${stepper('qty', d.qty)}</div>
-        <div class="field"><label for="sh-reason">사유 (필수)</label><input id="sh-reason" data-bind="reason" value="${esc(d.reason || '')}" placeholder="예: 월말 실사, 파손 폐기"></div>
+        <div class="field"><label for="sh-reason">사유 (필수)</label><input id="sh-reason" maxlength="200" data-bind="reason" value="${esc(d.reason || '')}" placeholder="예: 월말 실사, 파손 폐기"></div>
         ${sheetErr()}${okBtn('정정 저장')}`;
       break;
     case 'item': {
       const cats = flatTree(S.ix.catKids);
-      h = sheetHead(d.id ? '품목 수정' : '품목 추가') + `<div class="field"><label for="sh-name">품명</label><input id="sh-name" data-bind="name" value="${esc(d.name || '')}" placeholder="예: 도어 롤러" data-autofocus></div>
-        <div class="row2"><div class="field"><label for="sh-spec">규격·사양</label><input id="sh-spec" data-bind="spec" value="${esc(d.spec || '')}" placeholder="예: Ø62 행거용"></div><div class="field"><label for="sh-maker">제조사</label><input id="sh-maker" data-bind="maker" value="${esc(d.maker || '')}"></div></div>
-        <div class="field"><label for="sh-models">적용 기종</label><input id="sh-models" data-bind="models" value="${esc(d.models || '')}" placeholder="예: GEN2, STVF"></div>
+      h = sheetHead(d.id ? '품목 수정' : '품목 추가') + `<div class="field"><label for="sh-name">품명</label><input id="sh-name" maxlength="200" data-bind="name" value="${esc(d.name || '')}" placeholder="예: 도어 롤러" data-autofocus></div>
+        <div class="row2"><div class="field"><label for="sh-spec">규격·사양</label><input id="sh-spec" maxlength="200" data-bind="spec" value="${esc(d.spec || '')}" placeholder="예: Ø62 행거용"></div><div class="field"><label for="sh-maker">제조사</label><input id="sh-maker" maxlength="100" data-bind="maker" value="${esc(d.maker || '')}"></div></div>
+        <div class="field"><label for="sh-models">적용 기종</label><input id="sh-models" maxlength="500" data-bind="models" value="${esc(d.models || '')}" placeholder="예: GEN2, STVF"></div>
         <div class="field"><label for="sh-cat">분류</label><select id="sh-cat" data-bind="category_id"><option value="">분류 없음</option>${cats.map(({ n, depth }) => `<option value="${n.id}" ${d.category_id === n.id ? 'selected' : ''}>${'  '.repeat(depth)}${depth ? '└ ' : ''}${esc(n.name)}</option>`).join('')}</select></div>
-        <div class="row2"><div class="field"><label for="sh-unit">단위</label><input id="sh-unit" data-bind="unit" value="${esc(d.unit || '개')}" list="units"><datalist id="units"><option value="개"><option value="세트"><option value="봉"><option value="통"><option value="m"><option value="롤"></datalist></div>
+        <div class="row2"><div class="field"><label for="sh-unit">단위</label><input id="sh-unit" maxlength="20" data-bind="unit" value="${esc(d.unit || '개')}" list="units"><datalist id="units"><option value="개"><option value="세트"><option value="봉"><option value="통"><option value="m"><option value="롤"></datalist></div>
         <div class="field"><label for="sh-min">최소 재고</label><input id="sh-min" data-bind="min_qty" inputmode="numeric" pattern="[0-9]*" value="${esc(d.min_qty ?? '')}" placeholder="0"><span class="hint">이보다 적으면 「부족」 표시</span></div></div>
-        <div class="field"><label for="sh-memo">메모</label><textarea id="sh-memo" data-bind="memo">${esc(d.memo || '')}</textarea></div>
+        <div class="field"><label for="sh-memo">메모</label><textarea id="sh-memo" maxlength="3000" data-bind="memo">${esc(d.memo || '')}</textarea></div>
         ${sheetErr()}${okBtn(d.id ? '저장' : '품목 추가')}
         ${d.id ? `<button class="btn danger block" data-act="itemDelete" data-id="${d.id}" data-write>${ic('trash')}품목 삭제</button>` : ''}`;
       break;
     }
     case 'memo':
-      h = sheetHead('메모', esc(itemTitle(S.ix.item.get(d.id)))) + `<div class="field"><label for="sh-memo" class="sr">메모</label><textarea id="sh-memo" data-bind="memo" rows="6" data-autofocus placeholder="대체품, 보관 요령, 주의할 점">${esc(d.memo || '')}</textarea></div>${sheetErr()}${okBtn('메모 저장')}`;
+      h = sheetHead('메모', esc(itemTitle(S.ix.item.get(d.id)))) + `<div class="field"><label for="sh-memo" class="sr">메모</label><textarea id="sh-memo" maxlength="3000" data-bind="memo" rows="6" data-autofocus placeholder="대체품, 보관 요령, 주의할 점">${esc(d.memo || '')}</textarea></div>${sheetErr()}${okBtn('메모 저장')}`;
       break;
     case 'loc':
-      h = sheetHead(d.id ? '위치 수정' : (d.parent_id ? locPathText(d.parent_id) + ' 안에 추가' : '구역 추가')) + `<div class="field"><label for="sh-lname">이름</label><input id="sh-lname" data-bind="name" value="${esc(d.name || '')}" placeholder="${d.parent_id ? '예: 선반 5, 하단' : '예: 창고'}" data-autofocus></div>
-        <div class="field"><label for="sh-code">라벨 코드</label><input id="sh-code" data-bind="code" value="${esc(d.code || '')}" placeholder="예: WH-S5" autocapitalize="characters" autocomplete="off"><span class="hint">QR 라벨에 크게 찍히는 짧은 이름입니다. 겹치지 않게 정하세요.</span></div>
+      h = sheetHead(d.id ? '위치 수정' : (d.parent_id ? locPathText(d.parent_id) + ' 안에 추가' : '구역 추가')) + `<div class="field"><label for="sh-lname">이름</label><input id="sh-lname" maxlength="100" data-bind="name" value="${esc(d.name || '')}" placeholder="${d.parent_id ? '예: 선반 5, 하단' : '예: 창고'}" data-autofocus></div>
+        <div class="field"><label for="sh-code">라벨 코드</label><input id="sh-code" maxlength="40" data-bind="code" value="${esc(d.code || '')}" placeholder="예: WH-S5" autocapitalize="characters" autocomplete="off"><span class="hint">QR 라벨에 크게 찍히는 짧은 이름입니다. 겹치지 않게 정하세요.</span></div>
         <div class="field"><span class="lab">사진 (선택)</span><div class="toolbar"><div class="photo" style="width:68px;height:68px">${d.photo ? `<img src="${esc(d.photo)}" alt="">` : ic('shelf')}</div><button type="button" class="btn sm" data-act="sheetPhoto">${ic('cam')}${d.photo ? '사진 바꾸기' : '사진 찍기'}</button></div></div>
         ${sheetErr()}${okBtn(d.id ? '저장' : '추가')}
         ${d.id ? `<button class="btn danger block" data-act="locDelete" data-id="${d.id}" data-write>${ic('trash')}위치 삭제</button>` : ''}`;
       break;
     case 'cat':
-      h = sheetHead(d.id ? '분류 수정' : (d.parent_id ? (S.ix.cat.get(d.parent_id) || {}).name + ' 하위 분류 추가' : '분류 추가')) + `<div class="field"><label for="sh-cname">이름</label><input id="sh-cname" data-bind="name" value="${esc(d.name || '')}" data-autofocus></div>${sheetErr()}${okBtn(d.id ? '저장' : '추가')}${d.id ? `<button class="btn danger block" data-act="catDelete" data-id="${d.id}" data-write>${ic('trash')}분류 삭제</button>` : ''}`;
+      h = sheetHead(d.id ? '분류 수정' : (d.parent_id ? (S.ix.cat.get(d.parent_id) || {}).name + ' 하위 분류 추가' : '분류 추가')) + `<div class="field"><label for="sh-cname">이름</label><input id="sh-cname" maxlength="100" data-bind="name" value="${esc(d.name || '')}" data-autofocus></div>${sheetErr()}${okBtn(d.id ? '저장' : '추가')}${d.id ? `<button class="btn danger block" data-act="catDelete" data-id="${d.id}" data-write>${ic('trash')}분류 삭제</button>` : ''}`;
       break;
     case 'mkdir':
-      h = sheetHead('폴더 만들기', esc(d.parent_id ? folderPathText(d.parent_id) : '자료') + ' 안에') + `<div class="field"><label for="sh-fname">폴더 이름</label><input id="sh-fname" data-bind="name" value="${esc(d.name || '')}" placeholder="예: 현대 STVF" data-autofocus></div>
+      h = sheetHead('폴더 만들기', esc(d.parent_id ? folderPathText(d.parent_id) : '자료') + ' 안에') + `<div class="field"><label for="sh-fname">폴더 이름</label><input id="sh-fname" maxlength="200" data-bind="name" value="${esc(d.name || '')}" placeholder="예: 현대 STVF" data-autofocus></div>
         <label class="notice check"><input type="checkbox" data-bind="auto_sort" ${d.auto_sort ? 'checked' : ''}><span><b>날짜별 자동 정리</b> · 업무일지처럼 매달 쌓이는 자료라면 켜세요. 올릴 때 연도 › 월 폴더가 저절로 생깁니다.</span></label>
         ${sheetErr()}${okBtn('만들기')}`;
       break;
     case 'rename':
-      h = sheetHead(d.kind === 'folder' ? '폴더 이름 변경' : '파일 이름 변경') + `<div class="field"><label for="sh-rn">새 이름</label><input id="sh-rn" data-bind="name" value="${esc(d.name || '')}" data-autofocus></div>${sheetErr()}${okBtn('저장')}`;
+      h = sheetHead(d.kind === 'folder' ? '폴더 이름 변경' : '파일 이름 변경') + `<div class="field"><label for="sh-rn">새 이름</label><input id="sh-rn" maxlength="200" data-bind="name" value="${esc(d.name || '')}" data-autofocus></div>${sheetErr()}${okBtn('저장')}`;
       break;
     case 'moveTo':
       h = sheetHead(d.kind === 'folder' ? '폴더 옮기기' : '파일 옮기기', '옮길 곳을 고르세요') + folderPicker('target', d.target, d.kind === 'folder' ? d.id : null, d.kind === 'folder') + sheetErr() + okBtn('여기로 옮기기');
       break;
     case 'link':
-      h = sheetHead('영상·링크 등록', esc(folderPathText(d.folder_id))) + `<div class="field"><label for="sh-lt">제목</label><input id="sh-lt" data-bind="name" value="${esc(d.name || '')}" placeholder="예: 피트 작업 추락 방지 요령" data-autofocus></div>
-        <div class="field"><label for="sh-url">주소</label><input id="sh-url" data-bind="url" value="${esc(d.url || '')}" inputmode="url" autocapitalize="off" autocomplete="off" placeholder="https://youtu.be/..."><span class="hint">교육 영상은 유튜브에 「일부 공개」로 올린 뒤 주소를 붙여 넣으세요. 드라이브 용량을 쓰지 않습니다.</span></div>
+      h = sheetHead('영상·링크 등록', esc(folderPathText(d.folder_id))) + `<div class="field"><label for="sh-lt">제목</label><input id="sh-lt" maxlength="300" data-bind="name" value="${esc(d.name || '')}" placeholder="예: 피트 작업 추락 방지 요령" data-autofocus></div>
+        <div class="field"><label for="sh-url">주소</label><input id="sh-url" maxlength="2000" data-bind="url" value="${esc(d.url || '')}" inputmode="url" autocapitalize="off" autocomplete="off" placeholder="https://youtu.be/..."><span class="hint">교육 영상은 유튜브에 「일부 공개」로 올린 뒤 주소를 붙여 넣으세요. 드라이브 용량을 쓰지 않습니다.</span></div>
         ${sheetErr()}${okBtn('등록')}`;
       break;
     case 'folderMenu': {
@@ -2268,7 +2403,7 @@ function sheetView() {
             <div class="ministep"><button type="button" data-act="cartStep" data-i="${i}" data-d="-1" aria-label="하나 빼기">−</button><input id="cq-${i}" data-bind="cq_${i}" inputmode="numeric" value="${esc(sq(r, i))}" aria-label="수량" autocomplete="off"><button type="button" data-act="cartStep" data-i="${i}" data-d="1" aria-label="하나 더하기">+</button></div>
             <button type="button" class="iconbtn" data-act="cartDel" data-i="${i}" aria-label="빼기">${ic('x')}</button></div>`; }).join('') || empty('box', '담은 자재가 없습니다.')}</div>
           ${siteFields(d)}
-          <div class="field"><label for="sh-note">메모 (선택)</label><input id="sh-note" data-bind="note" value="${esc(d.note || '')}"></div>
+          <div class="field"><label for="sh-note">메모 (선택)</label><input id="sh-note" maxlength="200" data-bind="note" value="${esc(d.note || '')}"></div>
           ${sheetErr()}<div class="row2"><button class="btn big ghost" data-act="cartClear">비우기</button>${okBtn('출고 ' + rows.length + '가지', 'out')}</div>`;
       break;
     }
@@ -2276,10 +2411,10 @@ function sheetView() {
       const zones = S.ix.locKids.get(null) || [];
       h = sheetHead('위치 한 번에 만들기', '구역 › 캐비넷·선반 › 칸 을 한꺼번에 만들고 QR 라벨 코드도 붙입니다')
         + `<div class="field"><span class="lab">① 어디에</span><div class="pickgrid" style="max-height:none">${[['', '새 구역 만들기']].concat(zones.map(z => [z.id, z.name + (z.code ? ' · ' + z.code : '')])).map(([v, l]) => `<button type="button" class="pick" data-act="pick" data-k="zone" data-v="${v}" aria-pressed="${(d.zone || '') === v}"><span class="ic">${ic(v ? 'pin' : 'plus')}</span><div class="main"><span>${esc(l)}</span></div></button>`).join('')}</div></div>
-        ${d.zone ? '' : `<div class="row2"><div class="field"><label for="lb-zn">구역 이름</label><input id="lb-zn" data-bind="zname" data-live value="${esc(d.zname || '')}" placeholder="예: 창고" autocomplete="off"></div><div class="field"><label for="lb-zc">구역 코드</label><input id="lb-zc" data-bind="zcode" data-live value="${esc(d.zcode || '')}" placeholder="예: WH" autocapitalize="characters" autocomplete="off"></div></div>`}
+        ${d.zone ? '' : `<div class="row2"><div class="field"><label for="lb-zn">구역 이름</label><input id="lb-zn" maxlength="100" data-bind="zname" data-live value="${esc(d.zname || '')}" placeholder="예: 창고" autocomplete="off"></div><div class="field"><label for="lb-zc">구역 코드</label><input id="lb-zc" maxlength="20" data-bind="zcode" data-live value="${esc(d.zcode || '')}" placeholder="예: WH" autocapitalize="characters" autocomplete="off"></div></div>`}
         <div class="field"><span class="lab">② 캐비넷·선반</span><div class="seg block" role="group">${['선반', '캐비넷'].map(t => `<button type="button" data-act="lbType" data-v="${t}" aria-pressed="${(d.utype || '선반') === t}">${t}</button>`).join('')}</div></div>
-        <div class="lbrange"><div class="field"><label for="lb-a">번호 처음</label><input id="lb-a" data-bind="from" data-live inputmode="numeric" value="${esc(d.from ?? '1')}" autocomplete="off"></div><span class="tilde">~</span><div class="field"><label for="lb-b">번호 끝</label><input id="lb-b" data-bind="to" data-live inputmode="numeric" value="${esc(d.to ?? '4')}" autocomplete="off"></div><div class="field"><label for="lb-uc">코드 앞부분</label><input id="lb-uc" data-bind="ucode" data-live value="${esc(d.ucode || '')}" placeholder="${esc(locBulkPlan(d).auto)}" autocapitalize="characters" autocomplete="off"></div></div>
-        <div class="field"><span class="lab">③ 칸 (선택)</span><div class="filters" style="margin:0;padding:0;flex-wrap:wrap">${[['', '칸 없음'], ['상,하', '상·하'], ['상,중,하', '상·중·하'], ['1,2,3,4', '1·2·3·4']].map(([v, l]) => `<button type="button" class="fchip" data-act="lbSlots" data-v="${v}" aria-pressed="${(d.slots || '') === v}">${l}</button>`).join('')}</div><input id="lb-sl" data-bind="slots" data-live value="${esc(d.slots || '')}" placeholder="직접 적기: 예) 상,중,하" autocomplete="off"></div>
+        <div class="lbrange"><div class="field"><label for="lb-a">번호 처음</label><input id="lb-a" data-bind="from" data-live inputmode="numeric" value="${esc(d.from ?? '1')}" autocomplete="off"></div><span class="tilde">~</span><div class="field"><label for="lb-b">번호 끝</label><input id="lb-b" data-bind="to" data-live inputmode="numeric" value="${esc(d.to ?? '4')}" autocomplete="off"></div><div class="field"><label for="lb-uc">코드 앞부분</label><input id="lb-uc" maxlength="20" data-bind="ucode" data-live value="${esc(d.ucode || '')}" placeholder="${esc(locBulkPlan(d).auto)}" autocapitalize="characters" autocomplete="off"></div></div>
+        <div class="field"><span class="lab">③ 칸 (선택)</span><div class="filters" style="margin:0;padding:0;flex-wrap:wrap">${[['', '칸 없음'], ['상,하', '상·하'], ['상,중,하', '상·중·하'], ['1,2,3,4', '1·2·3·4']].map(([v, l]) => `<button type="button" class="fchip" data-act="lbSlots" data-v="${v}" aria-pressed="${(d.slots || '') === v}">${l}</button>`).join('')}</div><input id="lb-sl" maxlength="60" data-bind="slots" data-live value="${esc(d.slots || '')}" placeholder="직접 적기: 예) 상,중,하" autocomplete="off"></div>
         <div id="lb-prev">${locBulkPreview(d)}</div>${sheetErr()}${okBtn('만들기')}`;
       break;
     }
@@ -2289,13 +2424,13 @@ function sheetView() {
         + `<div class="ledger cartlist recvlist">${rows.map(r => { const it = S.ix.item.get(r.id); const q = d['rq_' + r.id] ?? String(r.qty); const loc = d['rl_' + r.id] || '';
           return `<div class="crow ${isInt(q, 1) && loc ? '' : 'bad'}"><div class="main"><span class="t">${esc(itemTitle(it))}</span><select id="rl-${r.id}" data-bind="rl_${r.id}" aria-label="넣을 위치"><option value="">넣을 위치 고르기</option>${locs.map(({ n, depth }) => `<option value="${n.id}" ${loc === n.id ? 'selected' : ''}>${'\u00a0\u00a0'.repeat(depth)}${esc(n.name)}${n.code ? ' · ' + esc(n.code) : ''}${qtyAt(r.id, n.id) ? ' (지금 ' + qtyAt(r.id, n.id) + ')' : ''}</option>`).join('')}</select></div>
             <div class="ministep"><button type="button" data-act="recvStep" data-id="${r.id}" data-d="-1" aria-label="하나 빼기">−</button><input id="rq-${r.id}" data-bind="rq_${r.id}" inputmode="numeric" value="${esc(q)}" aria-label="수량" autocomplete="off"><button type="button" data-act="recvStep" data-id="${r.id}" data-d="1" aria-label="하나 더하기">+</button></div><span class="unit">${esc(it.unit)}</span></div>`; }).join('') || empty('box', '체크한 품목이 없습니다.')}</div>
-          <div class="field"><label for="sh-note">메모 (선택)</label><input id="sh-note" data-bind="note" value="${esc(d.note || '')}" placeholder="예: 10월 발주분, 거래처 이름"></div>
+          <div class="field"><label for="sh-note">메모 (선택)</label><input id="sh-note" maxlength="200" data-bind="note" value="${esc(d.note || '')}" placeholder="예: 10월 발주분, 거래처 이름"></div>
           ${sheetErr()}${okBtn('입고 ' + rows.length + '가지', 'in')}
           <p class="muted" style="margin:0;font-size:12.5px">위치는 그 품목이 지금 가장 많이 있는 곳으로 미리 골라 두었습니다. 넣은 품목은 발주 목록에서 빠집니다.</p>`;
       break;
     }
     case 'myFolder':
-      h = sheetHead(d.id ? '내 폴더 이름 바꾸기' : '내 폴더 만들기', '내 저장함 정리용 · 이 휴대폰에만 저장됩니다') + `<div class="field"><label for="sh-mf">폴더 이름</label><input id="sh-mf" data-bind="name" value="${esc(d.name || '')}" placeholder="예: 자주 보는 회로도" data-autofocus autocomplete="off"></div>${sheetErr()}${okBtn(d.id ? '저장' : '만들기')}`;
+      h = sheetHead(d.id ? '내 폴더 이름 바꾸기' : '내 폴더 만들기', '내 저장함 정리용 · 이 휴대폰에만 저장됩니다') + `<div class="field"><label for="sh-mf">폴더 이름</label><input id="sh-mf" maxlength="60" data-bind="name" value="${esc(d.name || '')}" placeholder="예: 자주 보는 회로도" data-autofocus autocomplete="off"></div>${sheetErr()}${okBtn(d.id ? '저장' : '만들기')}`;
       break;
     case 'myMove': {
       const md = myData(); const doc = S.ix.doc.get(d.id);
@@ -2344,25 +2479,25 @@ ACT.sheetOk = () => {
   const itName = () => itemTitle(S.ix.item.get(d.item_id)); const un = () => (S.ix.item.get(d.item_id) || {}).unit || '';
   const needQty = (min = 1) => isInt(d.qty, min) ? (d.qty = +d.qty, true) : (bad(min ? '수량을 1 이상의 정수로 입력하세요.' : '수량을 0 이상의 정수로 입력하세요.'), false);
   const jobs = {
-    in: () => { if (!d.item_id) return bad('품목을 고르세요.'); if (!d.location_id) return bad('넣을 위치를 고르세요.'); if (!needQty()) return; return run(() => A.stockIn(d), null).then(r => r && undoable(`입고했습니다 · ${itName()} ${d.qty}${un()}`, r)); },
+    in: () => { if (!d.item_id) return bad('품목을 고르세요.'); if (!d.location_id) return bad('넣을 위치를 고르세요.'); if (!needQty()) return; return run(() => A.stockIn(d), null, { op: d.op_id, label: `입고 · ${itName()} ${d.qty}${un()}` }).then(r => r && undoable(`입고했습니다 · ${itName()} ${d.qty}${un()}`, r)); },
     out: () => { if (!d.location_id) return bad('꺼내는 위치를 고르세요.'); if (!needQty()) return; const site = siteText(d);
-      return run(() => A.stockOut({ ...d, site }), null).then(r => { if (!r) return; undoable(`출고했습니다 · ${itName()} ${d.qty}${un()}${site ? ' · ' + site : ''}`, r); if (site) rememberSite(site); }); },
-    move: () => { if (!d.from) return bad('보내는 위치를 고르세요.'); if (!d.to) return bad('받는 위치를 고르세요.'); if (!needQty()) return; return run(() => A.stockMove(d), null).then(r => r && undoable(`옮겼습니다 · ${itName()} ${d.qty}${un()}`, r)); },
-    adjust: () => { if (!d.location_id) return bad('위치를 고르세요.'); if (!needQty(0)) return; if (!(d.reason || '').trim()) return bad('정정 사유를 적어 주세요. 활동 기록에 남습니다.'); return run(() => A.stockAdjust(d), '수량을 정정했습니다'); },
+      return run(() => A.stockOut({ ...d, site }), null, { op: d.op_id, label: `출고 · ${itName()} ${d.qty}${un()}` }).then(r => { if (!r) return; undoable(`출고했습니다 · ${itName()} ${d.qty}${un()}${site ? ' · ' + site : ''}`, r); if (site) rememberSite(site); }); },
+    move: () => { if (!d.from) return bad('보내는 위치를 고르세요.'); if (!d.to) return bad('받는 위치를 고르세요.'); if (!needQty()) return; return run(() => A.stockMove(d), null, { op: d.op_id, label: `이동 · ${itName()} ${d.qty}${un()}` }).then(r => r && undoable(`옮겼습니다 · ${itName()} ${d.qty}${un()}`, r)); },
+    adjust: () => { if (!d.location_id) return bad('위치를 고르세요.'); if (!needQty(0)) return; if (!(d.reason || '').trim()) return bad('정정 사유를 적어 주세요. 활동 기록에 남습니다.'); return run(() => A.stockAdjust(d), '수량을 정정했습니다', { op: d.op_id, label: `수량 정정 · ${itName()}` }); },
     item: () => {
       if (!(d.name || '').trim()) return bad('품명을 입력하세요.');
       if (String(d.min_qty ?? '').trim() !== '' && !isInt(d.min_qty)) return bad('최소 재고는 0 이상의 정수로 입력하세요. (모르면 비워 두세요)');
       let p = d;
       if (d.id && s.orig) { p = { id: d.id }; ['name', 'spec', 'maker', 'models', 'category_id', 'unit', 'min_qty', 'memo'].forEach(k => { if (String(d[k] ?? '') !== String(s.orig[k] ?? '')) p[k] = d[k]; }); } // 바꾼 칸만 보낸다
-      return run(() => A.saveItem(p), d.id ? '저장했습니다' : '품목을 추가했습니다').then(id => { if (!id || d.id || id === true) return; if (d.countLoc) { countAdd(d.countLoc, id); render(); return; } nav({ tab: 'items', view: 'item', id }); });
+      return run(() => A.saveItem(p), d.id ? '저장했습니다' : '품목을 추가했습니다', d.id ? {} : { op: d.op_id, label: `품목 추가 · ${(d.name || '').trim()}` }).then(id => { if (!id || d.id || id === true) return; if (d.countLoc) { countAdd(d.countLoc, id); render(); return; } nav({ tab: 'items', view: 'item', id }); });
     },
     memo: () => run(() => A.saveItem({ id: d.id, memo: d.memo }), '메모를 저장했습니다'),
     cart: () => {
       const rows = cart(); if (!rows.length) return bad('담은 자재가 없습니다.');
       for (let i = 0; i < rows.length; i++) { const v = d['cq_' + i] ?? String(rows[i].qty); if (!isInt(v, 1)) return bad(itemTitle(S.ix.item.get(rows[i].item_id)) + ': 수량을 1 이상의 정수로 입력하세요.'); rows[i].qty = +v; }
       saveCart(); const site = siteText(d);
-      return run(() => A.stockOutMany({ rows: rows.map(r => ({ item_id: r.item_id, location_id: r.location_id, qty: r.qty })), site, note: d.note || '', op_id: d.op_id }), null)
-        .then(r => { if (!r) return; S.cart = []; saveCart(); render(); if (site) rememberSite(site); undoable(`${rows.length}가지 출고했습니다${site ? ' · ' + site : ''}`, r); });
+      return run(() => A.stockOutMany({ rows: rows.map(r => ({ item_id: r.item_id, location_id: r.location_id, qty: r.qty })), site, note: d.note || '', op_id: d.op_id }), null, { op: d.op_id, label: `한 번에 출고 ${rows.length}가지${site ? ' · ' + site : ''}`, kind: 'cart' })
+        .then(r => { if (!r) return; S.cart = []; S.cartSite = null; saveCart(); render(); if (site) rememberSite(site); undoable(`${rows.length}가지 출고했습니다${site ? ' · ' + site : ''}`, r); });
     },
     recv: () => {
       const rows = orderRows().filter(r => r.on && r.qty > 0); if (!rows.length) return bad('체크한 품목이 없습니다.');
@@ -2371,9 +2506,9 @@ ACT.sheetOk = () => {
         if (!isInt(q, 1)) return bad(itemTitle(it) + ': 수량을 1 이상의 정수로 입력하세요.');
         if (!loc || !S.ix.loc.has(loc)) return bad(itemTitle(it) + ': 넣을 위치를 고르세요.');
         out.push({ item_id: r.id, location_id: loc, qty: +q }); }
-      return run(() => A.stockInMany({ rows: out, note: d.note || '발주 입고', op_id: d.op_id }), null).then(ids => {
+      return run(() => A.stockInMany({ rows: out, note: d.note || '발주 입고', op_id: d.op_id }), null, { op: d.op_id, label: `한 번에 입고 ${out.length}가지`, kind: 'recv', extra: out.map(x => x.item_id) }).then(ids => {
         if (!ids) return; const done = new Set(out.map(x => x.item_id));
-        S.order.rows = S.order.rows.filter(r => !done.has(r.id)); S.lastRecvLoc = out[out.length - 1].location_id; render();
+        S.order.rows = S.order.rows.filter(r => !done.has(r.id)); orderSave(); S.lastRecvLoc = out[out.length - 1].location_id; render();
         undoable(`${out.length}가지 입고했습니다 · 발주 목록에서 뺐습니다`, ids);
       });
     },
@@ -2388,25 +2523,38 @@ ACT.sheetOk = () => {
     locBulk: () => {
       const P = locBulkPlan(d);
       if (P.err) return bad(P.err);
-      return run(() => A.locationsBulk(P.zone ? P.zone.id : null, P.rows, d.op_id), n => n ? n + '곳을 만들었습니다 · 바로 QR 라벨을 인쇄할 수 있습니다' : '새로 만들 위치가 없습니다 (모두 이미 있음)').then(n => {
+      return run(() => A.locationsBulk(P.zone ? P.zone.id : null, P.rows, d.op_id), n => n ? n + '곳을 만들었습니다 · 바로 QR 라벨을 인쇄할 수 있습니다' : '새로 만들 위치가 없습니다 (모두 이미 있음)', { op: d.op_id, label: '위치 한 번에 만들기' }).then(n => {
         if (n === false) return;
         const codes = new Set(); (function walk(rs) { rs.forEach(r => { if (r.code) codes.add(r.code); walk(r.kids || []); }); })(P.rows);
         S.labelSel = new Set(S.cache.locations.filter(l => codes.has((l.code || '').toUpperCase()) && l.kind !== 'zone').map(l => l.id));
         nav({ tab: 'more', view: 'labels' });
       });
     },
-    loc: () => { if (!(d.name || '').trim()) return bad('위치 이름을 입력하세요.'); return run(() => A.saveLocation(d), d.id ? '저장했습니다' : '위치를 추가했습니다'); },
-    cat: () => { if (!(d.name || '').trim()) return bad('분류 이름을 입력하세요.'); return run(() => A.saveCategory(d), '저장했습니다'); },
+    loc: () => { if (!(d.name || '').trim()) return bad('위치 이름을 입력하세요.'); d.code = String(d.code || '').trim().toUpperCase(); if (/\s/.test(d.code)) return bad('라벨 코드에는 빈칸을 넣지 마세요. (예: WH-S5)'); return run(() => A.saveLocation(d), d.id ? '저장했습니다' : '위치를 추가했습니다', d.id ? {} : { op: d.op_id, label: `위치 추가 · ${d.name.trim()}` }); },
+    cat: () => { if (!(d.name || '').trim()) return bad('분류 이름을 입력하세요.'); return run(() => A.saveCategory(d), '저장했습니다', d.id ? {} : { op: d.op_id, label: `분류 추가 · ${d.name.trim()}` }); },
     mkdir: () => { const n = (d.name || '').trim(); if (!n) return bad('폴더 이름을 입력하세요.'); if (/[\/\\]/.test(n)) return bad('폴더 이름에 / 나 \\ 는 쓸 수 없습니다.'); return run(() => A.mkdir(d), '폴더를 만들었습니다'); },
     rename: () => { const n = (d.name || '').trim(); if (!n) return bad('이름을 입력하세요.'); if (d.kind === 'folder' && /[\/\\]/.test(n)) return bad('폴더 이름에 / 나 \\ 는 쓸 수 없습니다.'); return run(() => d.kind === 'folder' ? A.renameFolder(d.id, n) : A.renameDoc(d.id, n), '이름을 바꿨습니다'); },
     moveTo: () => { if (d.kind !== 'folder' && !d.target) return bad('옮길 폴더를 고르세요.'); return run(() => d.kind === 'folder' ? A.moveFolder(d.id, d.target || null) : A.moveDoc(d.id, d.target), '옮겼습니다'); },
-    link: () => { if (!(d.name || '').trim()) return bad('제목을 입력하세요.'); if (!/^https?:\/\//i.test((d.url || '').trim())) return bad('주소는 https:// 로 시작해야 합니다.'); d.url = d.url.trim(); return run(() => A.addLink(d.folder_id, d), '등록했습니다'); },
+    link: () => { if (!(d.name || '').trim()) return bad('제목을 입력하세요.'); if (!/^https?:\/\//i.test((d.url || '').trim())) return bad('주소는 https:// 로 시작해야 합니다.'); d.url = d.url.trim(); return run(() => A.addLink(d.folder_id, d), '등록했습니다', { op: d.op_id, label: `링크 등록 · ${d.name.trim()}` }); },
     confirm: () => CONFIRM[d.cb] && CONFIRM[d.cb](d)
   };
   jobs[s.type] && jobs[s.type]();
 };
+async function doLogout() {
+  try { await S.api.logout(); } catch {}
+  store.del('gaya-cache'); store.del('gaya-user'); store.del('gaya-sites'); store.del('gaya-mysites');
+  S.user = null; S.cache = null; S.ix = null; S.sheet = null; S.authView = 'login'; S.stack = [{ ...ROOTS.items }]; S.tab = 'items'; S.lastTab = {}; S.recentSites = []; S.mySites = []; S.cart = null; S.cartSite = null; S.order = null; S.count = null; S.countNext = false; closeViewer(); S.q = ''; S.docsQ = ''; S.searchRes = null; S.docSearchRes = null; S.busy = false; S.newVer = null;
+  for (const k in VIEWDATA) delete VIEWDATA[k];
+  stopScan(); render();
+}
 const CONFIRM = {
-  cancelTx: d => run(() => S.api.stockCancel({ tx_id: d.id, op_id: d.op_id }), '취소했습니다 · 수량이 원래대로 돌아갔습니다'),
+  logout: () => { S.sheet = null; doLogout(); },
+  cartClear: () => { S.cart = []; saveCart(); S.cartSite = null; S.sheet = null; render(); note('담은 자재를 비웠습니다'); },
+  cntReset: d => { const a = countAll(); delete a[d.loc]; countSaveLocal(); S.sheet = null; render(); note('실사하던 수량을 처음대로 돌렸습니다'); },
+  ordReset: () => { S.sheet = null; orderInit(); orderSave(); render(); note('재고 부족 품목으로 다시 채웠습니다'); },
+  delComment: d => run(() => S.api.deleteComment(d.id), '댓글을 지웠습니다', { reload: false }),
+  unfav: d => { S.sheet = null; favOff(d.id); },
+  cancelTx: d => run(() => S.api.stockCancel({ tx_id: d.id, op_id: d.op_id }), '취소했습니다 · 수량이 원래대로 돌아갔습니다', { op: d.op_id, label: '기록 취소' }),
   itemDelete: d => run(() => S.api.deleteItem(d.id), '품목을 휴지통으로 옮겼습니다').then(ok => { if (ok) back(); }),
   locDelete: d => run(() => S.api.deleteLocation(d.id), '위치를 지웠습니다').then(ok => { if (ok && route().node === d.id) back(); }),
   catDelete: d => run(() => S.api.deleteCategory(d.id), '분류를 지웠습니다'),
@@ -2415,7 +2563,7 @@ const CONFIRM = {
   rejectUser: d => run(() => S.api.reject(d.id), '신청을 거절했습니다'),
   disableUser: d => run(() => S.api.setActive(d.id, false), '사용을 중지했습니다'),
   approveAll: d => run(() => S.api.approve(d.ids), d.ids.length + '명을 승인했습니다').then(ok => { if (ok && S.userSel) S.userSel.clear(); }),
-  bulkGo: d => run(() => S.api.bulkItems(d.rows, d.op_id), n => n + '개 품목을 등록했습니다').then(ok => { if (ok) { S.bulk = null; render(); } }),
+  bulkGo: d => run(() => S.api.bulkItems(d.rows, d.op_id), n => n + '개 품목을 등록했습니다', { op: d.op_id, label: `품목 대량 등록 ${d.rows.length}개`, kind: 'bulk' }).then(ok => { if (ok) { S.bulk = null; render(); } }),
   demoReset: () => { S.api.reset(); location.reload(); }
 };
 const ask = (title, msg, cb, extra = {}) => openSheet('confirm', { title, msg, cb, ...extra });
@@ -2432,7 +2580,7 @@ Object.assign(ACT, {
   mode: d => { S.itemsMode = d.m; store.set('gaya-mode', d.m); S.q = ''; S.searchRes = null; resetStack({ ...ROOTS.items }); },
   locRoot: () => resetStack({ ...ROOTS.items }),
   catRoot: () => { S.itemsMode = 'cat'; store.set('gaya-mode', 'cat'); resetStack({ ...ROOTS.items }); },
-  loc: d => { S.q = ''; S.searchRes = null; toItemsTab(); if (S.countNext && can(S.user, 'adjust')) { S.countNext = false; return nav({ tab: 'items', view: 'count', node: d.id }); } nav({ tab: 'items', view: 'browse', node: d.id, mode: 'loc' }); },
+  loc: d => { S.q = ''; S.searchRes = null; const fromScan = S.tab === 'scan'; toItemsTab(); if (S.countNext && fromScan && can(S.user, 'adjust')) { S.countNext = false; return nav({ tab: 'items', view: 'count', node: d.id }); } nav({ tab: 'items', view: 'browse', node: d.id, mode: 'loc' }); },
   cat: d => { S.q = ''; S.searchRes = null; nav({ tab: 'items', view: 'browse', node: d.id, mode: 'cat' }); },
   item: d => { toItemsTab(); nav({ tab: 'items', view: 'item', id: d.id }); },
   folder: d => { S.docsQ = ''; S.docSearchRes = null; if (!d.id) return resetStack({ ...ROOTS.docs }); const i = S.stack.findIndex(r => r.folder === d.id); if (i >= 0) { S.stack = S.stack.slice(0, i + 1); render(); window.scrollTo(0, 0); } else nav({ tab: 'docs', view: 'browse', folder: d.id }); },
@@ -2441,12 +2589,10 @@ Object.assign(ACT, {
   authView: d => { S.authView = d.v; S.authErr = ''; render(); },
   quick: async d => { S.sheet = null; S.user = await S.api.quickLogin(d.role); await afterLogin(); },
   recheck: async () => { try { S.user = await S.api.session(); } catch (e) { return toast(isNet(e) ? NET_MSG : e.message, true); } if (S.user && S.user.status === 'active') await afterLogin(); else { render(); note('아직 승인되지 않았습니다.'); } },
-  logout: async () => {
-    try { await S.api.logout(); } catch {}
-    store.del('gaya-cache'); store.del('gaya-user'); store.del('gaya-sites'); store.del('gaya-mysites');
-    S.user = null; S.cache = null; S.ix = null; S.sheet = null; S.authView = 'login'; S.stack = [{ ...ROOTS.items }]; S.tab = 'items'; S.lastTab = {}; S.recentSites = []; S.mySites = []; S.cart = null; S.cartSite = null; S.order = null; S.count = null; closeViewer(); S.q = ''; S.docsQ = ''; S.searchRes = null; S.docSearchRes = null;
-    for (const k in VIEWDATA) delete VIEWDATA[k];
-    stopScan(); render();
+  logout: () => {
+    if (!S.user || S.user.status !== 'active' || !S.cache) return doLogout(); // 승인 대기 화면 등
+    ask('로그아웃할까요?', online() ? '이 폰에 받아 둔 목록이 지워지고, 다시 쓰려면 사내번호·비밀번호로 로그인해야 합니다. 담아 둔 자재와 내 저장함은 그대로 남습니다.'
+      : '지금 오프라인입니다. 로그아웃하면 인터넷이 될 때까지 다시 로그인할 수 없고, 그동안 받아 둔 목록도 볼 수 없습니다.', 'logout', { ok: '로그아웃', danger: !online() });
   },
 
   txIn: d => { const rows = (S.ix.byItem.get(d.id) || []).slice().sort((a, b) => b.qty - a.qty); const here = route().node && S.ix.loc.has(route().node) ? route().node : null; openSheet('in', { item_id: d.id, location_id: here || (rows[0] || {}).location_id || null, qty: 1 }); },
@@ -2492,7 +2638,7 @@ Object.assign(ACT, {
   docRename: d => openSheet('rename', { kind: 'doc', id: d.id, name: S.ix.doc.get(d.id).name }),
   docMove: d => openSheet('moveTo', { kind: 'doc', id: d.id, target: S.ix.doc.get(d.id).folder_id }),
   docDelete: d => ask('파일을 지울까요?', S.ix.doc.get(d.id).name + ' · 휴지통에서 30일 안에 되살릴 수 있습니다.', 'docDelete', { id: d.id, ok: '지우기', danger: true }),
-  delComment: d => run(() => S.api.deleteComment(d.id), '댓글을 지웠습니다', { reload: false }),
+  delComment: d => ask('댓글을 지울까요?', '지운 댓글은 다시 살릴 수 없습니다.', 'delComment', { id: d.id, ok: '지우기', danger: true }),
 
   notif: d => { let l = {}; try { l = JSON.parse(d.link || '{}'); } catch {} if (!l.tab) return;
     if (l.view === 'item' && l.id) ACT.item({ id: l.id });
@@ -2507,7 +2653,7 @@ Object.assign(ACT, {
   rejectUser: (d, el, e) => { e.preventDefault(); const p = (vd().list || []).find(x => x.id === d.id); if (!p) return; ask('가입 신청을 거절할까요?', p.name + ' (' + p.emp_no + ') · 신청이 지워집니다. 실수라면 다시 신청하면 됩니다.', 'rejectUser', { id: d.id, ok: '거절', danger: true }); },
   userMenu: d => openSheet('userMenu', { id: d.id }),
   setRole: d => run(() => S.api.setRole(d.id, d.role), '권한을 바꿨습니다', { keepSheet: true }),
-  resetPw: async d => { const p = (vd().list || []).find(x => x.id === d.id); const pw = await run(() => S.api.resetPassword(d.id), null, { reload: false }); if (pw && pw !== true) openSheet('tempPw', { name: p.name, pw }); },
+  resetPw: async d => { const p = (vd().list || []).find(x => x.id === d.id); const pw = await run(() => S.api.resetPassword(d.id), null, { reload: false }); if (pw && pw !== true) openSheet('tempPw', { name: p ? p.name : '', pw }); },
   copyPw: d => { (navigator.clipboard ? navigator.clipboard.writeText(d.pw) : Promise.reject()).then(() => toast('복사했습니다'), () => toast('복사하지 못했습니다. 번호를 직접 알려 주세요.', true)); },
   disableUser: d => { const p = (vd().list || []).find(x => x.id === d.id); ask('사용을 중지할까요?', p.name + ' · 로그인만 막히고 입출고·댓글 기록은 그대로 남습니다. 언제든 「다시 사용」할 수 있습니다.', 'disableUser', { id: d.id, ok: '사용 중지', danger: true }); },
   enableUser: d => run(() => S.api.setActive(d.id, true), '다시 쓸 수 있게 했습니다'),
@@ -2551,7 +2697,9 @@ Object.assign(ACT, {
     try { S.user = await S.api.signup(vals); S.busy = false; render(); }
     catch (e) { S.busy = false; S.authErr = isNet(e) ? NET_MSG : e.message; render(); }
   },
-  comment: async (ds, f) => { const el = document.getElementById('cmt-' + ds.id); const body = el ? el.value : ''; if (!body.trim()) return; const ok = await run(() => S.api.addComment(ds.type, ds.id, body), '댓글을 남겼습니다', { reload: false }); if (ok) { const n = document.getElementById('cmt-' + ds.id); if (n) n.value = ''; } },
+  comment: async (ds, f) => { const el = document.getElementById('cmt-' + ds.id); const body = el ? el.value : ''; if (!body.trim()) return;
+    S.cmtOp = S.cmtOp && S.cmtOp.body === body && S.cmtOp.id === ds.id ? S.cmtOp : { id: ds.id, body, op: opId() }; // 같은 글을 다시 누르면 같은 요청 번호 → 댓글이 두 번 달리지 않음
+    const ok = await run(() => S.api.addComment(ds.type, ds.id, body, S.cmtOp.op), '댓글을 남겼습니다', { reload: false, op: S.cmtOp.op, label: '댓글' }); if (ok) { S.cmtOp = null; const n = document.getElementById('cmt-' + ds.id); if (n) n.value = ''; } },
   changePw: async () => { const o = $('#pw-old'), n = $('#pw-new'); if (!o || !n) return; const ok = await run(() => S.api.changePassword(o.value, n.value), '비밀번호를 바꿨습니다', { reload: false }); if (ok) ['pw-old', 'pw-new'].forEach(id => { const x = document.getElementById(id); if (x) x.value = ''; }); },
   codeGo: () => { const v = ($('#code-in') || {}).value || ''; const l = findLoc(v); if (l) ACT.loc({ id: l.id }); else toast('그 코드의 위치가 없습니다. 라벨에 적힌 코드를 확인하세요.', true); }
 });
@@ -2559,6 +2707,7 @@ Object.assign(ACT, {
 /* ───────── 편의 기능 (업데이트 4) ───────── */
 /* 입고·출고·이동 직후 잠깐 뜨는 「되돌리기」: 누르면 방금 기록을 취소해 수량을 원래대로 돌린다 */
 function undoable(msg, tid) {
+  if (S.already) return; // 「이미 되어 있었습니다」 안내를 덮어쓰지 않는다
   if (!tid || tid === true || !pref('undo')) return toast(msg);
   const many = Array.isArray(tid);
   toast(msg, false, { label: '되돌리기', fn: () => run(() => many ? S.api.stockCancelMany(tid, opId()) : S.api.stockCancel({ tx_id: tid, op_id: opId() }), many ? `되돌렸습니다 · ${tid.length}가지 수량이 원래대로 돌아갔습니다` : '되돌렸습니다 · 수량이 원래대로 돌아갔습니다') });
@@ -2581,7 +2730,12 @@ const TOUR = [
 ];
 const ymd = d => d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate());
 Object.assign(ACT, {
-  toastAct: () => { const a = S.toast && S.toast.act; clearTimeout(toastTimer); S.toast = null; drawToast(); if (a) a.fn(); },
+  toastAct: async () => { const a = S.toast && S.toast.act; clearTimeout(toastTimer); S.toast = null; drawToast(); if (!a) return;
+    for (let i = 0; i < 100 && S.busy; i++) await sleep(200); // 다른 저장이 끝나기를 기다렸다가 되돌린다 (눌렀는데 아무 일도 안 일어나는 일 방지)
+    if (S.busy) return toast('다른 저장이 끝나지 않아 되돌리지 못했습니다. 기록에서 「취소」를 눌러 주세요.', true);
+    a.fn(); },
+  reloadApp: () => location.reload(),
+  scanRetry: () => { S.scanErr = false; S.scanMsg = ''; stopScan(); render(); startScan(); },
   shareLow: () => {
     const lows = S.cache.items.filter(isLow).sort((a, b) => a.name.localeCompare(b.name, 'ko'));
     if (!lows.length) return note('재고가 부족한 품목이 없습니다.');
@@ -2621,7 +2775,9 @@ Object.assign(ACT, {
   fav: d => {
     const s = favs(); const on = !s.has(d.id); on ? s.add(d.id) : s.delete(d.id); store.set(favKey(), [...s]);
     const doc = S.ix.doc.get(d.id);
-    if (!on) { const md = myData(); delete md.place[d.id]; mySave(md); const had = !!offInfo(d.id); offDel(d.id); render(); return toast(had ? '내 저장함에서 뺐습니다 · 폰에 저장한 파일도 지웠습니다' : '내 저장함에서 뺐습니다'); }
+    if (!on) { s.add(d.id); store.set(favKey(), [...s]); // 빼기는 확인한 뒤에 (폰 저장본이 있으면)
+      if (offInfo(d.id)) return ask('내 저장함에서 뺄까요?', (doc ? doc.name + ' · ' : '') + '폰에 저장한 파일도 지워져, 전파가 없는 곳에서는 열 수 없게 됩니다.', 'unfav', { id: d.id, ok: '빼기', danger: true });
+      return favOff(d.id); }
     render();
     if (offOK(doc)) { toast('내 저장함에 넣었습니다 · 폰에도 저장합니다'); return saveOffline(d.id); }
     toast('내 저장함에 넣었습니다 · 자료 탭 「내 저장함」에 모입니다');
@@ -2690,10 +2846,11 @@ function locBulkPreview(d) {
 }
 
 /* 재고 실사: 위치마다 적던 수량을 기기에 잠시 저장해 둔다 (다른 화면에 다녀와도 그대로) */
-const COUNT_KEY = 'gaya-count';
-const countAll = () => S.count || (S.count = store.get(COUNT_KEY, {}) || {});
-const countState = loc => { const a = countAll(); return a[loc] || (a[loc] = { vals: {}, added: [] }); };
-const countSaveLocal = () => store.set(COUNT_KEY, countAll());
+const countKey = () => 'gaya-count-' + (S.user ? S.user.id : ''); // 사람마다 따로 (같은 폰을 다른 관리자가 써도 섞이지 않게)
+const countAll = () => S.count || (S.count = store.get(countKey(), {}) || {});
+const countState = loc => { const a = countAll(); return a[loc] || (a[loc] = { vals: {}, added: [], at: Date.now() }); };
+const countSaveLocal = () => store.set(countKey(), countAll());
+function countEntered(loc) { const c = countState(loc); return countIds(loc).filter(id => isInt(c.vals[id])).map(id => ({ item_id: id, qty: +c.vals[id] })); } // 적은 값 전부 (서버가 기록과 같은 것은 건너뛴다)
 const qtyAt = (item, loc) => ((S.ix.byItem.get(item) || []).find(x => x.location_id === loc) || {}).qty || 0;
 function countIds(loc) { const c = countState(loc); return [...new Set([...(S.ix.byLoc.get(loc) || []).map(x => x.item_id), ...c.added])].filter(id => S.ix.item.has(id)); }
 function countChanges(loc) {
@@ -2702,9 +2859,11 @@ function countChanges(loc) {
   return { out, bad };
 }
 function countAdd(loc, id) { const c = countState(loc); if (!c.added.includes(id)) c.added.push(id); if (c.vals[id] == null) c.vals[id] = ''; countSaveLocal(); }
-function updateCountBar() { const r = route(); if (r.view !== 'count') return; const { out } = countChanges(r.node); const b = $('#cnt-sum'); if (b) b.textContent = out.length ? `바뀐 품목 ${out.length}개` : '바뀐 품목 없음'; const sv = $('#cnt-save'); if (sv) sv.disabled = !out.length; }
+function updateCountBar() { const r = route(); if (r.view !== 'count') return; const { out } = countChanges(r.node); const b = $('#cnt-sum'); if (b) b.textContent = out.length ? `바뀐 품목 ${out.length}개` : '바뀐 품목 없음'; const sv = $('#cnt-save'); if (sv) sv.disabled = !out.length || S.busy; const rs = $('[data-act="cntReset"]'); if (rs) { const c = countState(r.node); rs.disabled = !(Object.values(c.vals).some(v => String(v).trim() !== '') || c.added.length); } }
 
 /* 발주 목록 */
+const orderKey = () => 'gaya-order-' + (S.user ? S.user.id : '');
+const orderSave = () => { if (S.order) store.set(orderKey(), { rows: S.order.rows, at: Date.now() }); };
 function orderInit() { S.order = { rows: S.cache.items.filter(isLow).map(it => ({ id: it.id, qty: Math.max(1, it.min_qty - total(it.id)), on: true, low: true })) }; }
 const orderRows = () => (S.order ? S.order.rows : []).filter(r => S.ix.item.has(r.id));
 function orderText() {
@@ -2722,7 +2881,20 @@ const offInfo = id => offList()[id] || null;
 const offOK = d => !!d && d.kind === 'file' && !(d.size > 50 * 1048576); // 폰에 저장할 수 있는 자료 (파일, 50MB 까지)
 const offView = d => !!d && ['pdf', 'img'].includes(fileKind(d.name, d.kind)[0]); // 앱 안에서 바로 그려 보이는 종류
 const offTotal = () => Object.values(offList()).reduce((a, x) => a + (x.size || 0), 0);
-async function offPut(id, blob) { try { const c = await caches.open(OFF_CACHE); await c.put(OFF_URL(id), new Response(blob, { headers: { 'Content-Type': blob.type || 'application/octet-stream' } })); OFF_MEM.delete(id); } catch { OFF_MEM.set(id, blob); } }
+async function offPut(id, blob) {
+  try { const c = await caches.open(OFF_CACHE); await c.put(OFF_URL(id), new Response(blob, { headers: { 'Content-Type': blob.type || 'application/octet-stream' } })); OFF_MEM.delete(id); }
+  catch (e) {
+    if (DEMO) { OFF_MEM.set(id, blob); return; } // 체험판 미리보기 창은 기기 저장소를 못 써서 잠시 기억만
+    throw new Error(/quota/i.test(e && e.name + e.message) ? '폰 저장 공간이 모자라 저장하지 못했습니다. 더보기 › 폰에 저장한 자료에서 안 쓰는 것을 지우거나, 폰 저장 공간을 비운 뒤 다시 하세요.' : '이 브라우저가 폰 저장을 막아 저장하지 못했습니다. (사파리 개인정보 보호 모드 등에서는 안 됩니다)');
+  }
+}
+/* 내 저장함에서 빼기 (폰에 저장한 파일도 함께 지운다) */
+function favOff(id) {
+  const s = favs(); s.delete(id); store.set(favKey(), [...s]);
+  const md = myData(); delete md.place[id]; mySave(md);
+  const had = !!offInfo(id); if (S.offBusy && S.offBusy[id] != null) S.offCancel = { ...(S.offCancel || {}), [id]: true };
+  offDel(id); render(); toast(had ? '내 저장함에서 뺐습니다 · 폰에 저장한 파일도 지웠습니다' : '내 저장함에서 뺐습니다');
+}
 async function offGet(id) { try { const c = await caches.open(OFF_CACHE); const r = await c.match(OFF_URL(id)); if (r) return await r.blob(); } catch {} return OFF_MEM.get(id) || null; }
 async function offDel(id) { const l = offList(); delete l[id]; store.set(OFF_KEY, l); OFF_MEM.delete(id); if (S.viewer && S.viewer.id === id) closeViewer(); try { const c = await caches.open(OFF_CACHE); await c.delete(OFF_URL(id)); } catch {} }
 function offPrune() { if (!S.ix || !online()) return; Object.keys(offList()).forEach(id => { if (!S.ix.doc.has(id)) offDel(id); }); }
@@ -2730,15 +2902,19 @@ async function saveOffline(id) {
   const d = S.ix.doc.get(id); if (!offOK(d)) return;
   if (!online()) return note('오프라인이라 지금은 폰에 저장할 수 없습니다. 연결되면 다시 누르세요.');
   S.offBusy = S.offBusy || {}; if (S.offBusy[id] != null) return;
-  S.offBusy[id] = 0; render();
+  try { // 남은 공간이 모자라면 받기 전에 알려 준다
+    if (!DEMO && navigator.storage && navigator.storage.estimate) { const e = await navigator.storage.estimate(); if (e.quota && d.size && e.quota - (e.usage || 0) < d.size * 1.3) return toast(`폰 저장 공간이 모자랍니다 (남은 공간 ${fmtSize(Math.max(0, e.quota - (e.usage || 0)))}). 폰에 저장한 자료 중 안 쓰는 것을 지운 뒤 다시 하세요.`, true); }
+  } catch {}
+  S.offBusy[id] = 0; if (S.offCancel) delete S.offCancel[id]; render();
   try {
     const blob = await S.api.docFile(id, f => { S.offBusy[id] = f; progress(`폰에 저장하는 중 ${Math.round(f * 100)}% · ${d.name}`); });
+    if (S.offCancel && S.offCancel[id]) { delete S.offCancel[id]; progress(null); delete S.offBusy[id]; render(); return; } // 받는 사이에 ☆ 를 꺼서 뺐으면 저장하지 않는다
     await offPut(id, blob);
     const l = offList(); l[id] = { size: blob.size, at: Date.now(), type: blob.type }; store.set(OFF_KEY, l);
     try { if (navigator.storage && navigator.storage.persist) navigator.storage.persist(); } catch {}
     if (!favs().has(id)) { const fs = favs(); fs.add(id); store.set(favKey(), [...fs]); }
     if (fileKind(d.name, d.kind)[0] === 'pdf') loadPdfLib().catch(() => {}); // 전파 없는 곳에서도 PDF 를 그릴 수 있게 미리 받아 둔다
-    progress(null); note(offView(d) ? '폰에 저장했습니다 · 전파가 없어도 열립니다' : '폰에 저장했습니다 · 전파가 없어도 「파일 열기」로 휴대폰 앱에서 엽니다');
+    progress(null); note((offView(d) ? '폰에 저장했습니다 · 전파가 없어도 열립니다' : '폰에 저장했습니다 · 전파가 없어도 「파일 열기」로 휴대폰 앱에서 엽니다') + (isIOS() && !isStandalone() && !DEMO ? '. 아이폰은 홈 화면에 앱을 추가해 써야 저장본이 오래 남습니다.' : ''));
   } catch (e) { progress(null); toast(isNet(e) ? NET_MSG : e.message, true); }
   delete S.offBusy[id]; render();
 }
@@ -2777,7 +2953,7 @@ function loadPdfLib() {
   return pdfLibP;
 }
 /* 저장본 보기: 화면을 다시 그려도 PDF 를 다시 그리지 않도록 보기 칸을 따로 들고 있다가 끼워 넣는다 */
-function closeViewer() { const v = S.viewer; S.viewer = null; if (!v) return; try { v.io && v.io.disconnect(); v.pdf && v.pdf.destroy(); v.url && URL.revokeObjectURL(v.url); } catch {} }
+function closeViewer() { const v = S.viewer; S.viewer = null; if (!v) return; try { v.io && v.io.disconnect(); v.io2 && v.io2.disconnect(); v.el && v.el.querySelectorAll('canvas').forEach(c => { c.width = c.height = 0; }); v.pdf && v.pdf.destroy(); v.url && URL.revokeObjectURL(v.url); } catch {} }
 function afterRender() {
   const slot = $('#offview'); if (!slot) return;
   const id = slot.dataset.id;
@@ -2795,16 +2971,21 @@ function afterRender() {
       if (S.viewer !== v) { pdf.destroy(); return; }
       const first = await pdf.getPage(1); const vp1 = first.getViewport({ scale: 1 });
       el.innerHTML = Array.from({ length: pdf.numPages }, (_, i) => `<div class="pg" data-p="${i + 1}" style="aspect-ratio:${vp1.width}/${vp1.height}"><span>${i + 1}</span></div>`).join('') + `<div class="pgnote">${pdf.numPages}쪽 · 두 손가락으로 벌리면 크게 보입니다</div>`;
+      // 화면 근처 쪽만 그리고, 멀리 지나간 쪽은 그림을 지워 폰 메모리를 아낀다 (100쪽짜리 PDF 도 멈추지 않게)
       const draw = async box => {
         if (box.dataset.done) return; box.dataset.done = '1';
         const pg = await pdf.getPage(+box.dataset.p); const vp = pg.getViewport({ scale: 1 });
-        const w = Math.min(2200, Math.round((box.clientWidth || 360) * Math.min(3, (window.devicePixelRatio || 1) * 1.5)));
+        const w = Math.min(1800, Math.round((box.clientWidth || 360) * Math.min(2, (window.devicePixelRatio || 1) * 1.25)));
         const sv = pg.getViewport({ scale: w / vp.width }); const c = document.createElement('canvas'); c.width = Math.round(sv.width); c.height = Math.round(sv.height);
         box.style.aspectRatio = vp.width + '/' + vp.height;
-        await pg.render({ canvasContext: c.getContext('2d'), viewport: sv }).promise; box.replaceChildren(c);
+        await pg.render({ canvasContext: c.getContext('2d'), viewport: sv }).promise;
+        if (!box.dataset.done) { c.width = c.height = 0; return; } // 그리는 사이에 멀어졌으면 버린다
+        box.replaceChildren(c); pg.cleanup();
       };
+      const release = box => { if (!box.dataset.done) return; delete box.dataset.done; const c = box.querySelector('canvas'); if (c) { c.width = c.height = 0; } box.innerHTML = `<span>${box.dataset.p}</span>`; };
       v.io = new IntersectionObserver(es => es.forEach(e => { if (e.isIntersecting) draw(e.target).catch(() => {}); }), { rootMargin: '800px 0px' });
-      el.querySelectorAll('.pg').forEach(b => v.io.observe(b));
+      v.io2 = new IntersectionObserver(es => es.forEach(e => { if (!e.isIntersecting) release(e.target); }), { rootMargin: '4000px 0px' });
+      el.querySelectorAll('.pg').forEach(b => { v.io.observe(b); v.io2.observe(b); });
     } catch (e) { if (S.viewer === v) el.innerHTML = `<div class="viewer-page">${ic('warn')}<div>${esc(/[가-힣]/.test(e && e.message || '') ? e.message : 'PDF 를 열지 못했습니다. 인터넷이 될 때 「드라이브에서 보기」로 열어 보세요.')}</div></div>`; }
   })();
 }
@@ -2827,7 +3008,7 @@ Object.assign(ACT, {
   cartOpen: () => { if (!cart().length) return; openSheet('cart', { ...(S.cartSite || {}) }); },
   cartStep: d => { const s = S.sheet; if (!s) return; const i = +d.i; const r = cart()[i]; if (!r) return; const v = Math.max(1, (parseInt(s.d['cq_' + i] ?? r.qty, 10) || 0) + +d.d); s.d['cq_' + i] = String(v); r.qty = v; saveCart(); render(); },
   cartDel: d => { const s = S.sheet; if (!s) return; cartSync(); const rows = cart(); rows.splice(+d.i, 1); Object.keys(s.d).filter(k => k.startsWith('cq_')).forEach(k => delete s.d[k]); saveCart(); if (!rows.length) { S.sheet = null; note('담은 자재를 모두 뺐습니다'); } render(); },
-  cartClear: () => { S.cart = []; saveCart(); S.cartSite = null; S.sheet = null; render(); note('담은 자재를 비웠습니다'); },
+  cartClear: () => ask('담은 자재를 비울까요?', `${cart().length}가지를 모두 뺍니다. 출고 기록은 남지 않습니다.`, 'cartClear', { ok: '비우기', danger: true }),
 
   /* 한 번에 입고 (발주 목록에서) */
   ordIn: () => {
@@ -2841,12 +3022,12 @@ Object.assign(ACT, {
   docsMode: d => { S.docsQ = ''; S.docSearchRes = null; resetStack(d.m === 'mine' ? { tab: 'docs', view: 'mine', folder: null } : { ...ROOTS.docs }); },
   myOpen: d => { if (!d.id) return resetStack({ tab: 'docs', view: 'mine', folder: null }); const i = S.stack.findIndex(r => r.view === 'mine' && r.folder === d.id); if (i >= 0) { S.stack = S.stack.slice(0, i + 1); render(); window.scrollTo(0, 0); } else nav({ tab: 'docs', view: 'mine', folder: d.id }); },
   myMkdir: () => openSheet('myFolder', { parent: route().view === 'mine' ? route().folder || null : null }),
-  myMkdirHere: () => { const s = S.sheet; if (!s) return; openSheet('myFolder', { parent: null, thenMove: s.d.id }); },
+  myMkdirHere: () => { const s = S.sheet; if (!s) return; openSheet('myFolder', { parent: s.d.target || null, thenMove: s.d.id }); }, // 고르고 있던 폴더 안에 만든다
   myRename: d => { const f = myData().folders.find(x => x.id === d.id); if (f) openSheet('myFolder', { id: f.id, name: f.name }); },
   myDelFolder: d => { const md = myData(); const f = md.folders.find(x => x.id === d.id); if (!f) return; ask(`「${f.name}」 폴더를 지울까요?`, '안에 있던 자료와 폴더는 한 칸 위로 옮겨집니다. 자료는 지워지지 않습니다.', 'myDelFolder', { id: f.id, ok: '폴더 지우기', danger: true }); },
   myDocMenu: d => openSheet('myDocMenu', { id: d.id }),
   myMoveOpen: d => openSheet('myMove', { id: d.id, target: myPlace(myData(), d.id) }),
-  myRemove: d => { S.sheet = null; ACT.fav({ id: d.id }); },
+  myRemove: d => { S.sheet = null; favOff(d.id); },
   mySaveAll: async () => { for (const id of myIds()) { const doc = S.ix.doc.get(id); if (offOK(doc) && !offInfo(id) && online()) await saveOffline(id); } },
 
   /* 위치 한 번에 만들기 */
@@ -2861,26 +3042,40 @@ Object.assign(ACT, {
 
   /* 재고 실사 */
   countOpen: d => nav({ tab: 'items', view: 'count', node: d.id }),
-  cntStep: d => { const loc = route().node; const c = countState(loc); const cur = c.vals[d.id]; const base = isInt(cur) ? +cur : qtyAt(d.id, loc); c.vals[d.id] = String(Math.max(0, base + +d.d)); countSaveLocal(); render(); },
+  cntStep: d => { const loc = route().node; const c = countState(loc); const cur = c.vals[d.id]; const base = isInt(cur) ? +cur : qtyAt(d.id, loc); c.vals[d.id] = String(Math.min(QTY_MAX, Math.max(0, base + +d.d))); c.at = Date.now(); countSaveLocal(); render(); },
   cntAdd: d => { countAdd(route().node, d.id); S.cntQ = ''; const qi = $('#q-cnt'); if (qi) qi.value = ''; render(); const el = document.getElementById('cnt-' + d.id); if (el) el.focus(); },
   cntNewItem: () => openSheet('item', { unit: '개', countLoc: route().node }),
-  cntReset: () => { const a = countAll(); delete a[route().node]; countSaveLocal(); render(); note('실사하던 수량을 처음대로 돌렸습니다'); },
-  cntSave: () => {
-    const loc = route().node; const { out, bad } = countChanges(loc);
+  cntReset: () => ask('적던 수량을 지울까요?', '이 위치에 적어 둔 실사 수량을 모두 지우고 처음 상태로 돌립니다. 저장한 기록은 그대로입니다.', 'cntReset', { loc: route().node, ok: '처음대로', danger: true }),
+  cntSave: async () => {
+    const loc = route().node; let { out, bad } = countChanges(loc);
     if (bad.length) return toast(itemTitle(S.ix.item.get(bad[0])) + ': 수량을 0 이상의 정수로 적으세요.', true);
+    const c = countState(loc); const p = pendGet();
+    if (c.op && p && p.op === c.op) { // 앞서 연결이 끊긴 실사 저장: 됐는지 먼저 확인 (그 뒤에 고친 수량을 잃지 않게)
+      if (!online()) return toast('오프라인이라 저장할 수 없습니다. 연결되면 다시 눌러 주세요.', true);
+      let done; try { done = await S.api.opDone(c.op); } catch (e) { return toast(isNet(e) ? NET_MSG : e.message, true); }
+      pendSet(null); c.op = null; countSaveLocal();
+      if (done) {
+        try { await loadCache(); } catch {}
+        out = countChanges(loc).out;
+        if (!out.length) { const a = countAll(); delete a[loc]; countSaveLocal(); render(); return note('앞에서 누른 실사 저장이 이미 되어 있었습니다.'); }
+        render(); return note(`앞에서 누른 실사 저장은 이미 되어 있었습니다. 그 뒤에 고친 ${out.length}개를 저장하려면 「저장」을 한 번 더 누르세요.`);
+      }
+    }
     if (!out.length) return note('바뀐 수량이 없습니다.');
-    const c = countState(loc); c.op = c.op || opId(); countSaveLocal();
-    run(() => S.api.stockCount({ location_id: loc, rows: out, reason: '실사', op_id: c.op }), n => `${n}개 품목 수량을 맞췄습니다 · 활동 기록에 「수량 정정(실사)」으로 남습니다`).then(ok => { if (ok === false) return; const a = countAll(); delete a[loc]; countSaveLocal(); render(); });
+    c.op = c.op || opId(); countSaveLocal();
+    run(() => S.api.stockCount({ location_id: loc, rows: countEntered(loc), reason: '실사', op_id: c.op }), n => `${n}개 품목 수량을 맞췄습니다 · 활동 기록에 「수량 정정(실사)」으로 남습니다`,
+      { op: c.op, label: '실사 · ' + locPathText(loc), kind: 'count', extra: loc, onFail: e => { if (!isNet(e)) { c.op = null; countSaveLocal(); } } })
+      .then(ok => { if (ok === false) return; const a = countAll(); delete a[loc]; countSaveLocal(); render(); });
   },
   cntNext: () => { S.countNext = true; goTab('scan'); note('다음 선반의 QR을 찍으면 바로 실사 화면이 열립니다'); },
 
   /* 발주 목록 */
-  order: () => { if (!S.order) orderInit(); nav({ tab: 'items', view: 'order' }); },
-  ordReset: () => { orderInit(); render(); note('재고 부족 품목으로 다시 채웠습니다'); },
-  ordToggle: (d, el) => { const r = orderRows().find(x => x.id === d.id); if (r) r.on = el.checked; setTimeout(render, 0); },
-  ordStep: d => { const r = orderRows().find(x => x.id === d.id); if (!r) return; r.qty = Math.max(0, (r.qty || 0) + +d.d); render(); },
-  ordAdd: d => { if (!S.order) orderInit(); if (!S.order.rows.some(r => r.id === d.id)) S.order.rows.push({ id: d.id, qty: 1, on: true }); S.ordQ = ''; const qi = $('#q-ord'); if (qi) qi.value = ''; render(); },
-  ordDel: d => { S.order.rows = S.order.rows.filter(r => r.id !== d.id); render(); },
+  order: () => { if (!S.order) { const sv = store.get(orderKey(), null); if (sv && Array.isArray(sv.rows) && Date.now() - (sv.at || 0) < 14 * 864e5) S.order = { rows: sv.rows }; else orderInit(); } nav({ tab: 'items', view: 'order' }); }, // 고치던 발주 목록은 2주 동안 이 폰에 남는다
+  ordReset: () => ask('발주 목록을 다시 채울까요?', '고친 수량과 직접 넣은 품목이 지워지고, 지금 재고 부족 품목으로 다시 채웁니다.', 'ordReset', { ok: '다시 채우기' }),
+  ordToggle: (d, el) => { const r = orderRows().find(x => x.id === d.id); if (r) r.on = el.checked; orderSave(); setTimeout(render, 0); },
+  ordStep: d => { const r = orderRows().find(x => x.id === d.id); if (!r) return; r.qty = Math.min(QTY_MAX, Math.max(0, (r.qty || 0) + +d.d)); orderSave(); render(); },
+  ordAdd: d => { if (!S.order) orderInit(); if (!S.order.rows.some(r => r.id === d.id)) S.order.rows.push({ id: d.id, qty: 1, on: true }); orderSave(); S.ordQ = ''; const qi = $('#q-ord'); if (qi) qi.value = ''; render(); },
+  ordDel: d => { S.order.rows = S.order.rows.filter(r => r.id !== d.id); orderSave(); render(); },
   ordShare: () => { if (!orderRows().some(r => r.on && r.qty > 0)) return note('보낼 품목이 없습니다. 수량을 적거나 체크하세요.'); shareOut('발주 목록', orderText()); },
   ordCsv: () => {
     const rows = orderRows().filter(r => r.on && r.qty > 0); if (!rows.length) return note('보낼 품목이 없습니다.');
@@ -2921,13 +3116,21 @@ Object.assign(ACT, {
 });
 Object.assign(CONFIRM, {
   offClear: async () => { S.sheet = null; for (const id of Object.keys(offList())) await offDel(id); render(); note('폰에 저장한 자료를 지웠습니다'); },
-  minApply: d => run(() => S.api.itemsMinSet(d.rows, d.op_id), n => `${n}개 품목의 최소 재고를 바꿨습니다`).then(ok => { if (ok !== false) { S.minOff = null; } }),
+  minApply: d => run(() => S.api.itemsMinSet(d.rows, d.op_id), n => `${n}개 품목의 최소 재고를 바꿨습니다`, { op: d.op_id, label: `최소 재고 ${d.rows.length}개 바꾸기` }).then(ok => { if (ok !== false) { S.minOff = null; } }),
   myDelFolder: d => { const md = myData(); const f = md.folders.find(x => x.id === d.id); S.sheet = null; if (!f) return render();
     md.folders.forEach(x => { if (x.parent === f.id) x.parent = f.parent || null; });
     Object.keys(md.place).forEach(k => { if (md.place[k] === f.id) { if (f.parent) md.place[k] = f.parent; else delete md.place[k]; } });
     md.folders = md.folders.filter(x => x.id !== f.id); mySave(md);
     if (route().view === 'mine' && route().folder === f.id) { S.stack.pop(); if (!S.stack.length) S.stack = [{ tab: 'docs', view: 'mine', folder: null }]; }
     render(); toast('폴더를 지웠습니다 · 안의 자료는 위로 옮겼습니다'); }
+});
+
+/* 연결이 끊겼던 저장이 실제로는 됐을 때의 뒷정리 */
+Object.assign(PEND_DONE, {
+  cart: () => { S.cart = []; saveCart(); S.cartSite = null; },
+  recv: p => { const ids = new Set(p.extra || []); if (S.order) { S.order.rows = S.order.rows.filter(r => !ids.has(r.id)); orderSave(); } },
+  count: p => { const a = countAll(); const c = a[p.extra]; if (c && c.op === p.op) { c.op = null; if (!countChanges(p.extra).out.length) delete a[p.extra]; countSaveLocal(); } },
+  bulk: () => { S.bulk = null; }
 });
 
 /* 로그인 뒤: 기본 자료를 받고 첫 화면을 연다. keepNav 면 보고 있던 화면을 그대로 둔다 (오프라인 저장본으로 먼저 연 경우) */
@@ -2981,7 +3184,8 @@ async function pickPhoto(file) {
   try {
     progress('사진 올리는 중…');
     const blob = await shrinkImage(file, 900, .78);
-    const url = S.api.putPhoto ? await S.api.putPhoto(blob) : await blobToDataURL(blob);
+    const small = S.api.putPhoto ? await shrinkImage(file, 160, .72).catch(() => null) : null; // 목록에 보일 작은 사진
+    const url = S.api.putPhoto ? await S.api.putPhoto(blob, small) : await blobToDataURL(blob);
     progress(null);
     if (t.type === 'sheet' && S.sheet) { S.sheet.d.photo = url; render(); }
     else if (t.type === 'item') run(() => S.api.saveItem({ id: t.id, photo: url }), '사진을 저장했습니다');
@@ -2989,15 +3193,21 @@ async function pickPhoto(file) {
 }
 
 /* ───────── QR 스캔 ───────── */
-let scanStream = null, scanLoop = null;
+let scanStream = null, scanLoop = null, scanStarting = false;
+const scanLive = () => !!scanStream && scanStream.getVideoTracks().some(t => t.readyState === 'live');
 async function startScan() {
-  const msg = t => { const m = $('#scanmsg'); if (m) m.textContent = t; };
+  const msg = (t, err = false) => { S.scanMsg = t; S.scanErr = err; const m = $('#scanmsg'); if (m) m.textContent = t; if (err && !$('[data-act="scanRetry"]')) render(); };
   if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) return msg('이 브라우저는 카메라를 쓸 수 없습니다. 코드를 직접 입력하세요.');
-  if (scanStream) return;
-  try {
-    scanStream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' }, audio: false });
-  } catch { return msg(DEMO ? '체험판 화면에서는 카메라를 쓸 수 없습니다. 아래에서 라벨을 골라 보세요.' : '카메라 권한이 필요합니다. 주소창 옆 자물쇠(아이폰은 설정 › Safari › 카메라)에서 허용하세요.'); }
-  const v = $('#scanvid'); if (!v || route().view !== 'scan') return stopScan();
+  if (scanLive()) return;            // 이미 켜져 있음
+  if (scanStream) stopScan();        // 폰이 카메라를 끊었으면(다른 앱 다녀옴 등) 다시 켠다
+  if (scanStarting) return;          // 켜는 중에 또 부르면 두 번 켜지 않는다
+  scanStarting = true; let stream;
+  try { stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' }, audio: false }); }
+  catch { scanStarting = false; return msg(DEMO ? '체험판 화면에서는 카메라를 쓸 수 없습니다. 아래에서 라벨을 골라 보세요.' : '카메라를 켜지 못했습니다. 카메라 권한을 허용했는지 확인하세요 (안드로이드: 주소창 옆 자물쇠, 아이폰: 설정 › Safari › 카메라).', true); }
+  scanStarting = false;
+  if (route().view !== 'scan' || document.hidden || scanStream) { stream.getTracks().forEach(t => t.stop()); return; } // 그사이 다른 화면으로 갔으면 바로 끈다
+  scanStream = stream;
+  const v = $('#scanvid'); if (!v) return stopScan();
   v.srcObject = scanStream; v.hidden = false; await v.play().catch(() => {}); msg('QR 라벨을 네모 안에 맞추세요');
   // 휴대폰에 QR 읽기 기능이 있으면 쓰고, 없거나 실패하면 jsQR 로 읽는다
   let det = null;
@@ -3005,7 +3215,8 @@ async function startScan() {
   const cv = document.createElement('canvas'); const cx = cv.getContext('2d', { willReadFrequently: true });
   const tick = async () => {
     if (!scanStream) return;
-    const vid = $('#scanvid'); if (!vid || route().view !== 'scan') return stopScan();
+    const vid = $('#scanvid'); if (!vid || route().view !== 'scan' || document.hidden) return stopScan();
+    if (!scanLive()) { stopScan(); return startScan(); }
     if (!vid.srcObject) { vid.srcObject = scanStream; vid.hidden = false; vid.play().catch(() => {}); }
     let text = null;
     if (det) { try { const r = await det.detect(vid); if (r[0]) text = r[0].rawValue; } catch { det = null; } }
@@ -3017,7 +3228,7 @@ async function startScan() {
   };
   tick();
 }
-function stopScan() { clearTimeout(scanLoop); if (scanStream) { scanStream.getTracks().forEach(t => t.stop()); scanStream = null; } }
+function stopScan() { clearTimeout(scanLoop); if (scanStream) { scanStream.getTracks().forEach(t => t.stop()); scanStream = null; } S.scanMsg = ''; }
 
 /* ───────── 시작 ─────────
    1) 이 폰에 받아 둔 내용이 있으면 바로 그 화면부터 보여 준다 (오프라인·느린 연결에서도 앱이 바로 열림)
@@ -3035,15 +3246,23 @@ async function boot() {
   ensureDom();
   S.deepCode = takeDeepCode();
   try { history.replaceState({ gayaBase: 1 }, '', location.pathname + location.hash); } catch {}
+  if (window.GAYA_SITE && !window.GAYA_CONFIG) { // 실제 앱인데 설정 파일(config.js)을 못 받은 경우: 체험판으로 바뀌지 않게 멈추고 안내한다
+    $('#app').innerHTML = `<div class="auth-wrap"><div class="auth"><div class="card"><h2>앱 설정을 불러오지 못했습니다</h2><p class="muted" style="margin:0">인터넷이 약하거나 서버를 고치는 중일 수 있습니다. 잠시 뒤 다시 열어 주세요.</p><button class="btn primary block big" onclick="location.reload()">다시 열기</button></div></div></div>`;
+    return;
+  }
   S.api = DEMO ? makeDemoAPI() : makeLiveAPI();
   const cu = DEMO ? null : store.get('gaya-user', null), cc = DEMO ? null : store.get('gaya-cache', null);
-  if (cu && cc && cu.status === 'active') {
-    S.user = cu; S.cache = cc; S.ix = buildIndex(cc); S.recentSites = store.get('gaya-sites', []); S.mySites = store.get('gaya-mysites', []); S.fromCache = true;
+  let ix = null;
+  if (cu && cc && cu.status === 'active') { try { ix = buildIndex(cc); } catch { store.del('gaya-cache'); } } // 저장본이 깨졌으면 버리고 서버에서 새로 받는다
+  if (ix) {
+    S.user = cu; S.cache = cc; S.ix = ix; S.recentSites = store.get('gaya-sites', []); S.mySites = store.get('gaya-mysites', []); S.fromCache = true;
     render(); ensureTrap(); openDeep();
   } else { S.booting = !DEMO; render(); }
   if (!online()) { S.waitOnline = true; S.booting = false; render(); } // 연결되면 자동으로 확인한다
   else await connect();
-  if (!DEMO) setInterval(() => { if (!document.hidden && S.user && S.cache && online() && !S.sheet && !S.busy && !S.waitOnline) refresh(); }, 30000);
+  if (!DEMO) setInterval(() => { if (!document.hidden && S.user && S.cache && online() && !S.sheet && !S.busy && !S.waitOnline && !isTyping()) refresh(); }, 30000); // 글자를 치는 중에는 화면을 다시 그리지 않는다
+  if (!DEMO) setInterval(() => { if (!document.hidden && S.user) checkVersion(); }, 30 * 60000);
+  if (!DEMO && S.user) setTimeout(() => checkVersion(true), 5000);
 }
 async function connect() {
   const cachedId = S.fromCache && S.user ? S.user.id : null;
@@ -3058,7 +3277,7 @@ async function connect() {
   if (u && u.status === 'active') { S.user = u; await afterLogin({ keepNav: cachedId === u.id }); }
   else { // 로그아웃되었거나 승인 대기 → 받아 둔 내용은 지운다
     if (cachedId) { store.del('gaya-cache'); store.del('gaya-user'); }
-    S.user = u || null; S.cache = null; S.ix = null; S.stack = [{ ...ROOTS.items }]; S.tab = 'items'; render();
+    S.user = u || null; S.cache = null; S.ix = null; S.sheet = null; S.stack = [{ ...ROOTS.items }]; S.tab = 'items'; render();
   }
 }
 boot();
