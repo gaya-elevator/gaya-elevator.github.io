@@ -10,7 +10,7 @@ const CONFIG = Object.assign({
   STORAGE_WARN: 0.8
 }, window.GAYA_CONFIG || {});
 const DEMO = !CONFIG.SUPABASE_URL;
-const APP_VER = '22c13e43';
+const APP_VER = 'c82f7e38';
 
 /* ───────── 작은 도구들 ───────── */
 const $ = (s, r = document) => r.querySelector(s);
@@ -1640,7 +1640,7 @@ function render() {
 }
 
 /* ───────── 로그인 · 가입 ───────── */
-const authHero = (sub = '') => `<div class="auth-hero">${logo('logo', true)}<div class="co">(주)가야엘리베이터</div><h1>자재·자료 관리</h1><p>${sub || '사내 전용 · 자재 입출고와 기술 자료'}</p></div>`;
+const authHero = (sub = '') => `<div class="auth-hero">${logo('logo', true)}<div class="co">(주)가야엘리베이터</div><h1 class="brandname">GAYA Hub</h1><p>${sub || '사내 전용 · 자재 입출고와 기술 자료'}</p></div>`;
 /* 관리자가 비밀번호를 초기화한 뒤 임시 번호로 로그인하면: 새 비밀번호를 정해야 앱으로 들어간다 */
 function forcePwView() {
   const err = S.authErr ? `<div class="notice crit" role="alert">${ic('warn')}<span>${esc(S.authErr)}</span></div>` : '';
@@ -2140,7 +2140,7 @@ VIEW['more.me'] = () => ({ title: '내 정보', crumbs: moreCr('내 정보'), bo
     <div class="field"><label for="pw-old">지금 비밀번호</label><input id="pw-old" name="old" type="password" required autocomplete="current-password"></div>
     <div class="field"><label for="pw-new">새 비밀번호</label><input id="pw-new" name="nw" type="password" required minlength="6" autocomplete="new-password"><span class="hint">6자 이상</span></div>
     <button class="btn primary big" data-write ${S.busy ? 'disabled' : ''}>바꾸기</button></form>
-  <p class="muted" style="font-size:12.5px;margin:0;text-align:center">가야 자재·자료 · 화면 버전 ${esc(APP_VER)}</p>` });
+  <p class="muted" style="font-size:12.5px;margin:0;text-align:center">GAYA Hub · 화면 버전 ${esc(APP_VER)}</p>` });
 
 VIEW['more.users'] = () => {
   const list = vd().list;
@@ -2305,7 +2305,7 @@ VIEW['more.stats'] = r => {
 /* ───────── 직원 안내문 (A4 한 장, 인쇄·PDF) ───────── */
 function posterHtml(url, admins) {
   const st = (n, t, b) => `<li><span class="n">${n}</span><div><b>${t}</b><p>${b}</p></div></li>`;
-  return `<div class="ps-head">${logo('logo')}<div><div class="ps-brand">(주)가야엘리베이터</div><div class="ps-title">자재·자료 앱 사용 안내</div></div></div>
+  return `<div class="ps-head">${logo('logo')}<div><div class="ps-brand">(주)가야엘리베이터</div><div class="ps-title">GAYA Hub 사용 안내</div><div class="ps-sub">자재 입출고 · 기술 자료 앱</div></div></div>
     <div class="ps-qr">${qrSvg(url)}<div><b>휴대폰 카메라로 QR을 찍으세요</b><span class="ps-url">${esc(url)}</span><a class="ps-btn" href="${esc(url)}" target="_blank" rel="noopener">휴대폰으로 보고 있다면 여기를 누르세요 ›</a><span>아이폰은 사파리, 안드로이드는 크롬에서 열립니다</span></div></div>
     <ol class="ps-steps">
       ${st(1, '가입 신청', '첫 화면 「가입 신청」에서 사내번호·이름·비밀번호를 적습니다. 관리자가 승인하면 바로 씁니다.')}
@@ -2819,7 +2819,7 @@ Object.assign(ACT, {
     const lows = S.cache.items.filter(isLow).sort((a, b) => a.name.localeCompare(b.name, 'ko'));
     if (!lows.length) return note('재고가 부족한 품목이 없습니다.');
     const n = new Date();
-    const text = `[가야 자재] 재고 부족 ${n.getMonth() + 1}/${n.getDate()} (${'일월화수목금토'[n.getDay()]})\n` + lows.map(it => `- ${itemTitle(it)}: ${total(it.id)}${it.unit} (최소 ${it.min_qty})`).join('\n') + `\n총 ${lows.length}품목`;
+    const text = `[GAYA Hub] 재고 부족 ${n.getMonth() + 1}/${n.getDate()} (${'일월화수목금토'[n.getDay()]})\n` + lows.map(it => `- ${itemTitle(it)}: ${total(it.id)}${it.unit} (최소 ${it.min_qty})`).join('\n') + `\n총 ${lows.length}품목`;
     shareOut('재고 부족 목록', text);
   },
   copyText: () => {
@@ -3190,7 +3190,7 @@ Object.assign(ACT, {
   },
   poster: () => nav({ tab: 'more', view: 'poster' }),
   shareApp: () => { const url = CONFIG.APP_URL || (DEMO ? 'https://gaya-elevator.github.io/' : location.origin + location.pathname);
-    shareOut('앱 주소 보내기', `[가야엘리베이터] 자재·자료 앱\n아래 주소를 누르면 열립니다.\n${url}\n① 「가입 신청」에서 사내번호·이름·비밀번호를 적고, 관리자가 승인하면 바로 씁니다.\n② 홈 화면에 추가해 두면 앱처럼 아이콘으로 열립니다.`); },
+    shareOut('앱 주소 보내기', `[가야엘리베이터] GAYA Hub (자재·자료 앱)\n아래 주소를 누르면 열립니다.\n${url}\n① 「가입 신청」에서 사내번호·이름·비밀번호를 적고, 관리자가 승인하면 바로 씁니다.\n② 홈 화면에 추가해 두면 앱처럼 아이콘으로 열립니다.`); },
   printPoster: () => { if (DEMO) return note('체험판 화면에서는 인쇄 창이 열리지 않습니다. 실제 앱에서는 바로 인쇄되고, 인쇄 창에서 「PDF로 저장」도 됩니다.'); document.body.classList.add('print-poster'); window.print(); setTimeout(() => document.body.classList.remove('print-poster'), 500); }
 });
 Object.assign(CONFIRM, {

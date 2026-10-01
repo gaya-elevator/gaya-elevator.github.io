@@ -1,11 +1,11 @@
-/* 가야 자재·자료 — 오프라인용 서비스 워커
+/* GAYA Hub (가야엘리베이터 자재·자료 앱) — 오프라인용 서비스 워커
    · 앱 화면 파일은 폰에 저장해 두고, 인터넷이 끊겨도 앱이 열리게 한다
    · 데이터(Supabase)와 자료 저장소(구글)는 저장하지 않는다 → 저장·조회는 항상 서버 기준
    · 화면(index.html)과 연결 설정(config.js)은 인터넷에서 먼저 받되, 3초 안에 안 오면 저장본으로 먼저 연다 (전파 약한 곳에서 몇 분씩 기다리지 않게)
    · app.js / app.css 는 버전 번호(?v=)가 붙은 주소 그대로 저장한다 → 새 버전을 올리면 새로 받는다
    · 새 버전을 받다가 꼭 필요한 파일 하나라도 실패하면 설치하지 않는다 → 옛 버전이 그대로 남아 앱이 깨지지 않는다
    · 폰 알림: 서버가 보낸 알림을 폰 알림으로 띄우고, 누르면 앱을 열어 그 화면으로 간다 */
-const VER = '22c13e43';
+const VER = 'c82f7e38';
 const SHELL = 'gaya-shell-' + VER;
 const FONT = 'gaya-font';
 const LIB = 'gaya-lib'; // PDF 보기 도구: 버전이 바뀌어도 지우지 않는다 (전파 없는 곳에서 저장한 PDF 를 열기 위해)
@@ -73,7 +73,7 @@ self.addEventListener('fetch', e => {
 self.addEventListener('push', e => {
   let d = {};
   try { d = e.data ? e.data.json() : {}; } catch { d = { t: e.data ? e.data.text() : '' }; }
-  e.waitUntil(self.registration.showNotification(d.t || '가야 자재·자료', {
+  e.waitUntil(self.registration.showNotification(d.t || 'GAYA Hub', {
     body: d.b || '', tag: d.id || undefined, icon: 'icon-192.png', lang: 'ko', data: { link: d.l || {}, id: d.id || '' }
   }));
 });

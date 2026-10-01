@@ -251,6 +251,7 @@ button.lrow:active{background:var(--sunk)}
 .auth-hero .logo{width:72px;height:88px;filter:drop-shadow(0 6px 14px rgba(0,0,0,.25))}
 .auth-hero .co{font-size:14px;font-weight:600;letter-spacing:.08em;color:var(--navy-muted);margin-top:6px}
 .auth-hero h1{margin:0;font-size:27px;font-weight:700;letter-spacing:-.02em}
+.auth-hero h1.brandname{font-size:34px;font-weight:800;letter-spacing:.005em} /* 앱 이름 GAYA Hub */
 .auth-hero p{margin:0;font-size:13.5px;color:var(--navy-muted)}
 .auth{display:flex;flex-direction:column;padding:0 18px 40px;max-width:440px;margin:-40px auto 0;gap:18px;width:100%;position:relative}
 .card{background:var(--surface);border:1px solid var(--line-soft);border-radius:16px;padding:20px;display:flex;flex-direction:column;gap:15px;box-shadow:var(--shadow-sm)}
@@ -506,6 +507,7 @@ label.crow{cursor:pointer}
 .ps-head .logo{width:9cqw;height:11cqw}
 .ps-brand{font-size:2.6cqw;font-weight:700;color:#2453C6;letter-spacing:.05em}
 .ps-title{font-size:5.4cqw;font-weight:700;letter-spacing:-.01em}
+.ps-sub{font-size:2.6cqw;color:#55607A;margin-top:.5cqw}
 .ps-qr{display:flex;align-items:center;gap:4cqw;background:#EEF2F7;border-radius:2cqw;padding:3cqw}
 .ps-qr svg{width:24cqw;height:24cqw;flex:none;background:#fff;border-radius:1cqw}
 .ps-qr div{display:flex;flex-direction:column;gap:1.2cqw;font-size:2.4cqw;color:#5A6783}
