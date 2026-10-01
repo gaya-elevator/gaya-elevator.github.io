@@ -10,7 +10,7 @@ const CONFIG = Object.assign({
   STORAGE_WARN: 0.8
 }, window.GAYA_CONFIG || {});
 const DEMO = !CONFIG.SUPABASE_URL;
-const APP_VER = '3b3611ee';
+const APP_VER = 'a532c3be';
 
 /* ───────── 작은 도구들 ───────── */
 const $ = (s, r = document) => r.querySelector(s);
@@ -671,6 +671,15 @@ function makeDemoAPI() {
       if (dup(c.parent_id, c.id)) fail('같은 이름의 분류가 이미 있습니다: ' + nm);
       const old = c.name; c.name = nm; log('분류 수정', 'category', c.id, old + ' → ' + c.name); save(); return c.id;
     },
+    async itemsSetCategory(ids, cat, op) {
+      await tick(); need('category');
+      if (op && D.ops && D.ops[op] != null) return D.ops[op];
+      if (!(ids || []).length) fail('가져올 품목을 고르세요.');
+      const c = cat ? byId(D.categories, cat) : null; if (cat && (!c || c.deleted_at)) fail('분류가 지워졌거나 없습니다. 화면을 새로 고친 뒤 다시 하세요.');
+      let n = 0; D.items.filter(i => ids.includes(i.id) && !i.deleted_at && (i.category_id || null) !== (cat || null)).forEach(i => { i.category_id = cat || null; i.updated_at = now(); n++; });
+      if (n) log('품목 분류 변경', 'category', cat || null, `품목 ${n}개 → ${c ? c.name : '분류 없음'}`);
+      if (op) { D.ops = D.ops || {}; D.ops[op] = n; } save(); return n;
+    },
     async deleteCategory(id) {
       await tick(); need('category');
       const c = byId(D.categories, id); if (!c || c.deleted_at) fail('이미 지워졌거나 없는 분류입니다. 화면을 새로 고친 뒤 확인하세요.');
@@ -1247,6 +1256,7 @@ function makeLiveAPI() {
     deleteLocation: id => rpc('location_delete', { p_id: id }),
     saveCategory: x => rpc('category_save', { p: { id: x.id || null, parent_id: x.parent_id || null, name: x.name }, p_op: x.id ? null : (x.op_id || null) }),
     deleteCategory: id => rpc('category_delete', { p_id: id }),
+    itemsSetCategory: (ids, cat, op) => rpc('items_set_category', { p_items: ids, p_cat: cat || null, p_op: op || null }),
 
     mkdir: ({ parent_id, name, auto_sort }) => rpc('folder_create', { p_parent: parent_id || null, p_name: name, p_auto: !!auto_sort }),
     async renameFolder(id, name) { const old = pathNames(id); await rpc('folder_rename', { p_id: id, p_name: name }); await driveAll('renamePath', { path: old, name: String(name).trim() }); },
@@ -1885,7 +1895,7 @@ const VIEW = {};
 VIEW['items.browse'] = r => {
   const node = r.node; const mode = node ? (r.mode || S.itemsMode) : S.itemsMode; const q = S.q.trim();
   let title = '자재', cr = null, pane = '', actions = '';
-  const tools = `<div class="toolbar"><div class="seg" role="group" aria-label="보기 방식"><button data-act="mode" data-m="loc" aria-pressed="${mode === 'loc'}">위치별</button><button data-act="mode" data-m="cat" aria-pressed="${mode === 'cat'}">분류별</button></div><span class="grow"></span>${can(S.user, 'item') ? `<button class="btn sm" data-act="itemNew" data-write>${ic('plus')}품목 추가</button>` : ''}</div>`;
+  const tools = `<div class="toolbar"><div class="seg" role="group" aria-label="보기 방식"><button data-act="mode" data-m="loc" aria-pressed="${mode === 'loc'}">위치별</button><button data-act="mode" data-m="cat" aria-pressed="${mode === 'cat'}">분류별</button></div><span class="grow"></span>${mode === 'cat' && can(S.user, 'item') ? `<button class="btn sm edit" data-act="catManage" data-write aria-label="분류 편집">${ic('gear')}분류</button>` : ''}${can(S.user, 'item') ? `<button class="btn sm add" data-act="itemNew" data-write>${ic('plus')}품목 추가</button>` : ''}</div>`;
   if (q) {
     const items = (S.searchRes || []).map(id => S.ix.item.get(id)).filter(Boolean);
     pane = `<section class="sec"><div class="sec-h"><h2>검색 결과</h2><span class="aside">${S.searchRes ? items.length + '건' : ''}</span></div>
@@ -1903,7 +1913,7 @@ VIEW['items.browse'] = r => {
         ${tools}
         ${lows.length ? `<section class="sec" id="sec-low"><div class="sec-h"><h2>재고 부족</h2><span class="grow"></span>${can(S.user, 'item') ? `<button class="btn sm" data-act="order">${ic('list')}발주 목록</button>` : ''}<button class="btn sm" data-act="shareLow">${ic('share')}목록 보내기</button></div>${itemList(lows, it => total(it.id))}</section>` : ''}
         <section class="sec"><div class="sec-h"><h2>보관 위치</h2></div><div class="ledger">${(S.ix.locKids.get(null) || []).map(l => locRow(l)).join('') || empty('pin', '등록된 위치가 없습니다.', can(S.user, 'location') ? '더보기 › 위치 관리에서 구역을 추가하세요.' : '')}</div></section>
-        <section class="sec" id="sec-recent"><div class="sec-h"><h2>최근 입출고</h2><button class="btn sm ghost" data-act="history">${ic('history')}전체 기록</button></div><div class="ledger hist">${d.tx ? (tx.length ? tx.map(t => txRow(t, true)).join('') : empty('list', '아직 입출고 기록이 없습니다.')) : loadingBox()}</div></section>`;
+        <section class="sec" id="sec-recent"><div class="sec-h"><h2>최근 입출고</h2><button class="btn sm" data-act="history">${ic('history')}전체 기록</button></div><div class="ledger hist">${d.tx ? (tx.length ? tx.map(t => txRow(t, true)).join('') : empty('list', '아직 입출고 기록이 없습니다.')) : loadingBox()}</div></section>`;
     } else {
       const l = S.ix.loc.get(node); if (!l) return { title: '위치 없음', body: empty('pin', '지워진 위치입니다.') };
       const path = pathOf(S.ix.loc, node);
@@ -1919,7 +1929,7 @@ VIEW['items.browse'] = r => {
           <div class="herobtns"><button class="btn sm" data-act="labelsFor" data-id="${l.id}">${ic('qr')}라벨</button>${can(S.user, 'adjust') ? `<button class="btn sm" data-act="countOpen" data-id="${l.id}" data-write>${ic('check')}실사</button>` : ''}</div></section>
         ${can(S.user, 'adjust') && countChanges(node).out.length ? `<button class="notice warn" data-act="countOpen" data-id="${l.id}" style="border:0;text-align:left;width:100%;cursor:pointer">${ic('warn')}<span>실사하던 수량 <b>${countChanges(node).out.length}개</b>가 아직 저장되지 않았습니다. 눌러서 이어서 하세요.</span></button>` : ''}
         ${kids.length ? `<section class="sec"><div class="sec-h"><h2>안쪽 위치</h2></div><div class="ledger">${kids.map(k => locRow(k)).join('')}</div></section>` : ''}
-        <section class="sec"><div class="sec-h"><h2>이 위치의 자재</h2><button class="btn sm" data-act="inHere" data-id="${l.id}" data-write>${ic('in')}여기에 입고</button></div>
+        <section class="sec"><div class="sec-h"><h2>이 위치의 자재</h2><button class="btn sm add" data-act="inHere" data-id="${l.id}" data-write>${ic('in')}여기에 입고</button></div>
         ${here.length ? itemList(here.map(x => x.it), it => qmap.get(it.id), null, node) : `<div class="ledger">${empty('box', '이 위치에 등록된 자재가 없습니다.', kids.length ? '안쪽 위치를 열어 보세요.' : '「여기에 입고」로 자재를 넣을 수 있습니다.')}</div>`}</section>`;
     }
   } else {
@@ -1931,9 +1941,11 @@ VIEW['items.browse'] = r => {
     const direct = S.cache.items.filter(i => (i.category_id || null) === (node || null));
     const catRow = k => { const ids = descCats(k.id); const its = S.cache.items.filter(i => ids.includes(i.category_id)); const low = its.filter(isLow).length;
       return `<button class="lrow" data-act="cat" data-id="${k.id}"><span class="ic">${ic('tag')}</span><div class="main"><span class="t">${esc(k.name)}</span><span class="s">${its.length}품목</span></div>${low ? `<span class="chip crit">부족 ${low}</span>` : ''}<span class="chev">${ic('chev')}</span></button>`; };
-    pane = (node ? '' : tools) + (kids.length ? `<section class="sec"><div class="sec-h"><h2>${c ? '하위 분류' : '분류'}</h2></div><div class="ledger">${kids.map(catRow).join('')}</div></section>` : '')
+    const catTools = c && can(S.user, 'item') ? `<div class="toolbar fill"><button class="btn sm add" data-act="itemNew" data-write>${ic('plus')}품목 추가</button><button class="btn sm edit" data-act="catSet" data-id="${c.id}" data-write>${ic('gear')}분류 설정</button></div>` : '';
+    const noneCnt = c ? S.cache.items.filter(i => !i.category_id || !S.ix.cat.has(i.category_id)).length : 0;
+    pane = (node ? catTools : tools) + (kids.length ? `<section class="sec"><div class="sec-h"><h2>${c ? '하위 분류' : '분류'}</h2></div><div class="ledger">${kids.map(catRow).join('')}</div></section>` : '')
       + (direct.length ? `<section class="sec"><div class="sec-h"><h2>${c ? '품목' : '분류 없음'}</h2><span class="aside">전체 수량</span></div>${itemList(direct, it => total(it.id), tapesOf)}</section>` : '')
-      + (!kids.length && !direct.length ? `<div class="ledger">${empty('tag', '이 분류에는 품목이 없습니다.')}</div>` : '');
+      + (!kids.length && !direct.length ? `<div class="ledger">${empty('tag', '이 분류에는 품목이 없습니다.', c && can(S.user, 'item') && noneCnt ? `분류 없는 품목 ${noneCnt}개를 「분류 설정」에서 한 번에 가져올 수 있습니다.` : '')}</div>` : '');
   }
   const body = searchBox('q-items', S.q, '품명·규격·제조사·기종 검색', '자재 검색') + `<div id="pane" class="pane">${pane}</div>`;
   return { title, body, pane, crumbs: q ? null : cr, actions: q ? '' : actions };
@@ -2025,7 +2037,7 @@ VIEW['items.count'] = r => {
     ${Object.values(c.vals).some(v => String(v).trim() !== '') && c.at && Date.now() - c.at > 6 * 36e5 ? `<div class="notice warn">${ic('clock')}<span>이 폰에 <b>${fmtWhen(new Date(c.at).toISOString())}</b>에 적어 둔 수량이 남아 있습니다. 그 뒤로 입출고가 있었다면 「처음대로」를 누르고 다시 세세요.</span></div>` : ''}
     <div class="notice">${ic('info')}<span>선반에 <b>실제로 있는 수량</b>을 세어 적으세요. 비워 둔 칸은 그대로 두고, 바뀐 품목만 「수량 정정(실사)」으로 저장됩니다. 적던 수량은 저장 전까지 이 폰에 남아 있습니다.</span></div>
     <section class="sec"><div class="sec-h"><h2>이 위치의 품목</h2><span class="aside">${ids.length}가지</span></div><div class="ledger countlist">${rows || empty('box', '이 위치에 등록된 품목이 없습니다.', '아래에서 품목을 찾아 넣으세요.')}</div></section>
-    <section class="sec"><div class="sec-h"><h2>다른 품목 넣기</h2><button class="btn sm" data-act="cntNewItem" data-write>${ic('plus')}새 품목 등록</button></div>
+    <section class="sec"><div class="sec-h"><h2>다른 품목 넣기</h2><button class="btn sm add" data-act="cntNewItem" data-write>${ic('plus')}새 품목 등록</button></div>
       ${searchBox('q-cnt', S.cntQ || '', '품명·규격 검색 (초성도 됨)', '넣을 품목 검색')}<div id="cnt-add">${countAddList()}</div></section>`;
   const bar = `<div class="countbar"><button class="btn ghost" data-act="cntReset" ${Object.keys(c.vals).length || c.added.length ? '' : 'disabled'}>처음대로</button><span id="cnt-sum" class="grow">${out.length ? `바뀐 품목 ${out.length}개` : '바뀐 품목 없음'}</span><button id="cnt-save" class="btn primary" data-act="cntSave" data-write ${out.length && !S.busy ? '' : 'disabled'}>저장</button></div>`;
   return { title: '실사 · ' + l.name, crumbs: crumbs([{ label: '자재', act: 'locRoot' }, ...pathOf(S.ix.loc, l.id).map(p => ({ label: p.name, act: 'loc', data: { id: p.id } })), { label: '실사' }]), body, bar, actions: `<button class="btn sm" data-act="cntNext">${ic('scan')}다음 선반</button>` };
@@ -2062,7 +2074,7 @@ function txRow(t, withItem = false) {
     <div class="d">${withItem ? `<div style="font-weight:600">${esc(itemTitle(it))}</div>` : ''}<span class="who">${esc(personName(t.user_id))}</span> <span class="meta">${fmtWhen(t.created_at)}</span>
       <div class="meta"><span class="mono">${esc(where)}</span>${t.site ? ` · <button class="sitelink" data-act="site" data-v="${esc(parseSite(t.site).name || t.site)}">${esc(t.site)}</button>` : ''}${t.note ? ' · ' + esc(t.note) : ''}${t.canceled_by ? ' · 취소됨' : ''}</div></div>
     <span class="n">${sign}${Math.abs(t.qty)}${esc(unit)}</span>
-    ${canC ? `<div class="ops"><button class="btn sm" data-act="cancelTx" data-id="${t.id}" data-write>${ic('undo')}${t.type === 'out' ? '출고 취소 (안 씀)' : TX_NAME[t.type] + ' 취소'}</button></div>` : ''}
+    ${canC ? `<div class="ops"><button class="btn sm danger ghost" data-act="cancelTx" data-id="${t.id}" data-write>${ic('undo')}${t.type === 'out' ? '출고 취소 (안 씀)' : TX_NAME[t.type] + ' 취소'}</button></div>` : ''}
   </div>`;
 }
 
@@ -2081,9 +2093,9 @@ VIEW['items.item'] = r => {
       <div class="total"><span class="big" style="${isLow(it) ? 'color:var(--crit)' : ''}">${t}<small>${u}</small></span><span class="muted">전체 재고</span>${lowChip(it)}</div>
       <div class="actions3"><button class="btn in" data-act="txIn" data-id="${it.id}" data-write>${ic('in')}입고</button><button class="btn out" data-act="txOut" data-id="${it.id}" data-write ${t ? '' : 'disabled'}>${ic('out')}출고</button><button class="btn" data-act="txMove" data-id="${it.id}" data-write ${t ? '' : 'disabled'}>${ic('move')}이동</button></div>
     </section>
-    <section class="sec"><div class="sec-h"><h2>위치별 수량</h2>${adm ? `<button class="btn sm ghost" data-act="txAdjust" data-id="${it.id}" data-write>수량 정정</button>` : ''}</div>
+    <section class="sec"><div class="sec-h"><h2>위치별 수량</h2>${adm ? `<button class="btn sm edit" data-act="txAdjust" data-id="${it.id}" data-write>수량 정정</button>` : ''}</div>
       <div class="ledger">${rows.length ? rows.map(s => `<button class="lrow" data-act="loc" data-id="${s.location_id}"><div class="main"><span class="t"><span class="tape">${esc(locCode(s.location_id))}</span></span><span class="s">${esc(locPathText(s.location_id))}</span></div><span class="qty">${s.qty}<small>${u}</small></span><span class="chev">${ic('chev')}</span></button>`).join('') : empty('pin', '재고가 없습니다.', '「입고」로 넣을 위치와 수량을 기록하세요.')}</div></section>
-    <section class="sec"><div class="sec-h"><h2>메모</h2><button class="btn sm ghost" data-act="memoEdit" data-id="${it.id}" data-write>${ic('edit')}${it.memo ? '고치기' : '적기'}</button></div>
+    <section class="sec"><div class="sec-h"><h2>메모</h2><button class="btn sm edit" data-act="memoEdit" data-id="${it.id}" data-write>${ic('edit')}${it.memo ? '고치기' : '적기'}</button></div>
       ${it.memo ? `<div class="memo">${esc(it.memo)}</div>` : `<div class="muted" style="font-size:14px">대체품, 보관 요령, 주의할 점 등을 적어 두면 모두가 봅니다.</div>`}</section>
     <section class="sec"><div class="sec-h"><h2>입출고 기록</h2><span class="aside">최근 50건</span></div>
       <div class="ledger hist">${d.tx ? (d.tx.length ? d.tx.map(x => txRow(x)).join('') : empty('list', '아직 기록이 없습니다.')) : loadingBox()}</div></section>
@@ -2112,7 +2124,7 @@ VIEW['docs.browse'] = r => {
     const byName = f && f.sort_mode === 'name';
     const docs = (S.ix.docsIn.get(fid) || []).slice().sort(byName ? (a, b) => a.name.localeCompare(b.name, 'ko', { numeric: true }) : (a, b) => b.created_at.localeCompare(a.created_at));
     const adm = can(S.user, 'folderAdmin');
-    pane = `<div class="toolbar fill"><button class="btn sm" data-act="mkdir" data-write>${ic('folderPlus')}폴더 만들기</button>${fid ? `<button class="btn sm" data-act="addLink" data-write>${ic('link')}영상·링크</button>` : ''}${f && adm ? `<button class="btn sm" data-act="folderSet" data-id="${fid}" data-write>${ic('gear')}폴더 설정</button>` : ''}</div>
+    pane = `<div class="toolbar fill"><button class="btn sm add" data-act="mkdir" data-write>${ic('folderPlus')}폴더 만들기</button>${fid ? `<button class="btn sm add" data-act="addLink" data-write>${ic('link')}영상·링크</button>` : ''}${f && adm ? `<button class="btn sm edit" data-act="folderSet" data-id="${fid}" data-write>${ic('gear')}폴더 설정</button>` : ''}</div>
       ${f && (f.auto_sort || f.notify_new) ? `<div class="notice">${ic('info')}<span>${[f.auto_sort ? '이 폴더에 올린 파일은 날짜에 맞춰 <b>연도 › 월</b> 폴더로 자동 정리됩니다.' : '', f.notify_new ? '여기에 자료를 올리면 모든 직원에게 <b>새 자료 알림</b>이 갑니다.' : ''].filter(Boolean).join(' ')}</span></div>` : ''}
       ${kids.length ? `<section class="sec"><div class="sec-h"><h2>폴더</h2></div><div class="ledger">${kids.map(k => { const n = (S.ix.docsIn.get(k.id) || []).length, m = (S.ix.folderKids.get(k.id) || []).length;
         return `<button class="lrow" data-act="folder" data-id="${k.id}"><span class="folder-ic">${ic('folder')}</span><div class="main"><span class="t">${esc(k.name)}</span><span class="s">${[m ? '폴더 ' + m : '', n ? '파일 ' + n : ''].filter(Boolean).join(' · ') || '비어 있음'}${k.auto_sort ? ' · 날짜별 자동 정리' : ''}${k.notify_new ? ' · 새 자료 알림' : ''}</span></div><span class="chev">${ic('chev')}</span></button>`; }).join('')}</div></section>` : (fid ? '' : `<div class="ledger">${empty('folder', '아직 폴더가 없습니다.', '「폴더 만들기」로 도면, 교육 자료 같은 폴더를 만드세요.')}</div>`)}
@@ -2144,8 +2156,8 @@ VIEW['docs.mine'] = r => {
   const body = `${f ? '' : docSeg('mine')}
     ${!all.length ? `<div class="notice">${ic('info')}<span>자료를 열고 오른쪽 위 <b>☆</b>를 누르면 여기에 모이고 <b>폰에도 저장</b>됩니다. 전파가 약한 기계실·피트에서도 열립니다. 폴더를 만들어 내 마음대로 정리하세요. (이 휴대폰에만 저장)</span></div>` : ''}
     ${all.length && isIOS() && !isStandalone() ? `<div class="notice warn">${ic('warn')}<span><b>아이폰 사파리에서 쓰는 중입니다.</b> 사파리는 7일 넘게 이 앱을 열지 않으면 폰에 저장한 자료를 지울 수 있습니다. <b>홈 화면에 앱을 추가</b>해 아이콘으로 쓰면 지워지지 않습니다.</span><button class="btn sm" data-act="install">추가 방법</button></div>` : ''}
-    ${notSaved.length && online() ? `<div class="notice warn">${ic('warn')}<span>아직 폰에 없는 자료가 ${notSaved.length}개 있습니다.</span><button class="btn sm" data-act="mySaveAll">모두 폰에 저장</button></div>` : ''}
-    <div class="toolbar"><button class="btn sm" data-act="myMkdir">${ic('folderPlus')}폴더 만들기</button>${f ? `<span class="grow"></span><button class="btn sm ghost" data-act="myRename" data-id="${f.id}">${ic('edit')}이름 바꾸기</button><button class="btn sm ghost danger" data-act="myDelFolder" data-id="${f.id}">${ic('trash')}폴더 지우기</button>` : ''}</div>
+    ${notSaved.length && online() ? `<div class="notice warn">${ic('warn')}<span>아직 폰에 없는 자료가 ${notSaved.length}개 있습니다.</span><button class="btn sm add" data-act="mySaveAll">모두 폰에 저장</button></div>` : ''}
+    <div class="toolbar"><button class="btn sm add" data-act="myMkdir">${ic('folderPlus')}폴더 만들기</button>${f ? `<span class="grow"></span><button class="btn sm edit" data-act="myRename" data-id="${f.id}">${ic('edit')}이름 바꾸기</button><button class="btn sm ghost danger" data-act="myDelFolder" data-id="${f.id}">${ic('trash')}폴더 지우기</button>` : ''}</div>
     ${kids.length ? `<section class="sec"><div class="sec-h"><h2>내 폴더</h2></div><div class="ledger">${kids.map(k => { const n = myDocsIn(md, k.id).length, m = myKids(md, k.id).length;
       return `<button class="lrow" data-act="myOpen" data-id="${k.id}"><span class="folder-ic mine">${ic('folder')}</span><div class="main"><span class="t">${esc(k.name)}</span><span class="s">${[m ? '폴더 ' + m : '', n ? '자료 ' + n : ''].filter(Boolean).join(' · ') || '비어 있음'}</span></div><span class="chev">${ic('chev')}</span></button>`; }).join('')}</div></section>` : ''}
     <section class="sec"><div class="sec-h"><h2>${f ? '이 폴더의 자료' : kids.length ? '폴더에 넣지 않은 자료' : '저장한 자료'}</h2><span class="aside">${docs.length ? docs.length + '개' : ''}</span></div>
@@ -2173,10 +2185,10 @@ VIEW['docs.doc'] = r => {
   const md = myData(); const where = favs().has(d.id) ? '내 저장함' + myPath(md, myPlace(md, d.id)).map(x => ' › ' + esc(x.name)).join('') : '';
   const offbar = off ? `<div class="offbar ok">${ic('phone')}<span>${where} · 폰에 저장됨 ${fmtSize(off.size)} · ${offView(d) ? '전파가 없어도 열립니다' : '전파가 없어도 「파일 열기」로 엽니다'}</span><button class="linkbtn" data-act="myDocMenu" data-id="${d.id}">폴더로 옮기기</button>${offView(d) && online() && d.drive_id && !DEMO ? `<button class="linkbtn" data-act="driveView" data-id="${d.id}">${S.driveView && S.driveView[d.id] ? '저장본으로 보기' : '드라이브에서 보기'}</button>` : ''}</div>`
     : busy ? `<div class="offbar">${ic('download')}<span>폰에 저장하는 중 ${Math.round((S.offBusy[d.id] || 0) * 100)}%</span></div>`
-    : offOK(d) ? `<div class="offbar">${ic('phone')}<span>${favs().has(d.id) ? where + '에 있지만 아직 폰에 없습니다.' : '☆를 누르면 「내 저장함」에 모이고 폰에도 저장돼, 전파 없는 곳에서도 열립니다.'}</span><button class="btn sm" data-act="offSave" data-id="${d.id}">${ic('download')}${favs().has(d.id) ? '폰에 저장' : '내 저장함에 넣기'}</button></div>` : '';
+    : offOK(d) ? `<div class="offbar">${ic('phone')}<span>${favs().has(d.id) ? where + '에 있지만 아직 폰에 없습니다.' : '☆를 누르면 「내 저장함」에 모이고 폰에도 저장돼, 전파 없는 곳에서도 열립니다.'}</span><button class="btn sm add" data-act="offSave" data-id="${d.id}">${ic('download')}${favs().has(d.id) ? '폰에 저장' : '내 저장함에 넣기'}</button></div>` : '';
   const body = `<div class="viewer">${viewer}</div>${offbar}
     <section class="hero" style="gap:12px"><dl class="kv">${d.size ? `<dt>크기</dt><dd>${fmtSize(d.size)}</dd>` : ''}<dt>올린 사람</dt><dd>${esc(personName(d.uploaded_by))}</dd><dt>올린 날</dt><dd>${fmtWhen(d.created_at)}</dd><dt>폴더</dt><dd>${esc(folderPathText(d.folder_id))}</dd>${d.store_no ? `<dt>저장소</dt><dd>${esc(d.store_no)}호</dd>` : ''}</dl>
-      <div class="toolbar">${!DEMO && d.drive_id ? `<a class="btn sm" href="https://drive.google.com/file/d/${esc(d.drive_id)}/view" target="_blank" rel="noopener">${ic('eye')}크게 보기</a>` : ''}${d.kind === 'file' ? `<button class="btn sm" data-act="docDownload" data-id="${d.id}">${ic('download')}파일 받기</button>` : ''}${adm ? `<button class="btn sm" data-act="docRename" data-id="${d.id}" data-write>${ic('edit')}이름 변경</button><button class="btn sm" data-act="docMove" data-id="${d.id}" data-write>${ic('move')}이동</button><button class="btn sm danger" data-act="docDelete" data-id="${d.id}" data-write>${ic('trash')}삭제</button>` : ''}</div></section>
+      <div class="toolbar">${!DEMO && d.drive_id ? `<a class="btn sm" href="https://drive.google.com/file/d/${esc(d.drive_id)}/view" target="_blank" rel="noopener">${ic('eye')}크게 보기</a>` : ''}${d.kind === 'file' ? `<button class="btn sm" data-act="docDownload" data-id="${d.id}">${ic('download')}파일 받기</button>` : ''}${adm ? `<button class="btn sm edit" data-act="docRename" data-id="${d.id}" data-write>${ic('edit')}이름 변경</button><button class="btn sm edit" data-act="docMove" data-id="${d.id}" data-write>${ic('move')}이동</button><button class="btn sm danger" data-act="docDelete" data-id="${d.id}" data-write>${ic('trash')}삭제</button>` : ''}</div></section>
     ${commentsBlock('doc', d.id, v.cm)}`;
   const cr = crumbs([{ label: '자료', act: 'folder', data: { id: '' } }, ...pathOf(S.ix.folder, d.folder_id).map(p => ({ label: p.name, act: 'folder', data: { id: p.id } })), { label: d.name }]);
   const on = favs().has(d.id);
@@ -2305,9 +2317,9 @@ VIEW['more.status'] = () => {
 
 VIEW['more.places'] = () => {
   const rows = flatTree(S.ix.locKids);
-  const body = `<div class="toolbar"><button class="btn sm primary" data-act="locBulk" data-write>${ic('plus')}한 번에 만들기</button><button class="btn sm" data-act="locNew" data-write>${ic('plus')}구역 하나 추가</button><button class="btn sm" data-act="go" data-v="labels">${ic('qr')}QR 라벨 만들기</button></div>
+  const body = `<div class="toolbar"><button class="btn sm primary" data-act="locBulk" data-write>${ic('plus')}한 번에 만들기</button><button class="btn sm add" data-act="locNew" data-write>${ic('plus')}구역 하나 추가</button><button class="btn sm" data-act="go" data-v="labels">${ic('qr')}QR 라벨 만들기</button></div>
     <div class="ledger">${rows.map(({ n, depth }) => `<div class="lrow" style="padding-left:${14 + depth * 20}px"><span class="ic">${ic(n.kind === 'zone' ? 'pin' : 'shelf')}</span><div class="main"><span class="t">${esc(n.name)}</span>${n.code ? `<span class="s"><span class="tape">${esc(n.code)}</span></span>` : ''}</div>
-      ${depth < 2 ? `<button class="btn sm ghost" data-act="locNew" data-parent="${n.id}" data-write aria-label="${esc(n.name)} 안에 추가">${ic('plus')}안에</button>` : ''}<button class="iconbtn" data-act="locEdit" data-id="${n.id}" data-write aria-label="수정">${ic('edit')}</button></div>`).join('')}</div>
+      ${depth < 2 ? `<button class="btn sm add" data-act="locNew" data-parent="${n.id}" data-write aria-label="${esc(n.name)} 안에 추가">${ic('plus')}안에</button>` : ''}<button class="iconbtn" data-act="locEdit" data-id="${n.id}" data-write aria-label="수정">${ic('edit')}</button></div>`).join('')}</div>
     <p class="muted" style="font-size:12.5px;margin:0">구역(예: 창고) › 캐비넷·선반(예: 선반 3) › 칸(예: 하단) 세 단계까지 만들 수 있습니다. 코드는 라벨에 크게 찍히는 짧은 이름입니다.</p>`;
   return { title: '위치 관리', crumbs: moreCr('위치 관리'), body };
 };
@@ -2473,9 +2485,9 @@ function updateOkLabel() {
 }
 function updateSheetPart() {
   if (!S.sheet) return render();
-  const t = S.sheet.type, el = t === 'in' ? $('#iq-list') : t === 'locBulk' ? $('#lb-prev') : null;
+  const t = S.sheet.type, el = t === 'in' ? $('#iq-list') : t === 'locBulk' ? $('#lb-prev') : t === 'catSet' ? $('#cs-list') : null;
   if (!el) return render();
-  el.innerHTML = t === 'in' ? inPickList(S.sheet.d.iq) : locBulkPreview(S.sheet.d);
+  el.innerHTML = t === 'in' ? inPickList(S.sheet.d.iq) : t === 'catSet' ? csList(S.sheet.d) : locBulkPreview(S.sheet.d);
 }
 /* 현장 + 동 + 호기 칸 (출고·한 번에 출고 공용) */
 function siteFields(d) {
@@ -2532,7 +2544,7 @@ function sheetView() {
       const units = UNITS.includes(u0) ? UNITS : [u0, ...UNITS];
       const catField = `<div class="field"><label for="${d.cat_new ? 'sh-newcat' : 'sh-cat'}">분류 <span class="opt">(선택)</span></label>
           ${d.cat_new ? `<div class="toolbar nowrap"><input id="sh-newcat" class="grow" maxlength="100" data-bind="new_category" value="${esc(d.new_category || '')}" placeholder="새 분류 이름 (예: 도어 부품)" autocomplete="off" enterkeyhint="done"><button type="button" class="btn primary" data-act="catAddInline" ${S.busy ? 'disabled' : ''}>${ic('plus')}추가</button><button type="button" class="btn" data-act="catPickBack">취소</button></div>`
-            : `<div class="toolbar nowrap"><select id="sh-cat" data-bind="category_id"><option value="">분류 없음</option>${cats.map(({ n, depth }) => `<option value="${n.id}" ${d.category_id === n.id ? 'selected' : ''}>${'  '.repeat(depth)}${depth ? '└ ' : ''}${esc(n.name)}</option>`).join('')}<option value="__new">＋ 새 분류 만들기…</option></select><button type="button" class="btn" data-act="catManage">${ic('edit')}편집</button></div>`}
+            : `<div class="toolbar nowrap"><select id="sh-cat" data-bind="category_id"><option value="">분류 없음</option>${cats.map(({ n, depth }) => `<option value="${n.id}" ${d.category_id === n.id ? 'selected' : ''}>${'  '.repeat(depth)}${depth ? '└ ' : ''}${esc(n.name)}</option>`).join('')}<option value="__new">＋ 새 분류 만들기…</option></select><button type="button" class="btn edit" data-act="catManage">${ic('edit')}편집</button></div>`}
           <span class="hint">${d.cat_new ? '이름을 적고 <b>추가</b>를 누르면 분류가 생기고 바로 골라집니다.' : '분류는 자재를 종류별로 묶는 이름표입니다 (예: 도어 부품 · 로프·도르래 · 안전 장치). 자재 첫 화면 「분류별」 보기에서 이 묶음으로 모아 봅니다. 정하지 않아도 됩니다. <b>편집</b>에서 분류 이름을 바꾸거나 지웁니다.'}</span></div>`;
       h = sheetHead(isNew ? '품목 추가' : '품목 수정') + `<div class="field"><label for="sh-name">품명</label><input id="sh-name" maxlength="200" data-bind="name" value="${esc(d.name || '')}" placeholder="예: 도어 롤러" data-autofocus></div>
         <div class="row2"><div class="field"><label for="sh-spec">규격·사양</label><input id="sh-spec" maxlength="200" data-bind="spec" value="${esc(d.spec || '')}" placeholder="예: Ø62 행거용"></div><div class="field"><label for="sh-maker">제조사</label><input id="sh-maker" maxlength="100" data-bind="maker" value="${esc(d.maker || '')}"></div></div>
@@ -2558,9 +2570,24 @@ function sheetView() {
           if (d.edit === n.id) return `<div class="lrow cmrow" style="${pad(depth)}"><input id="sh-cren" maxlength="100" data-bind="editName" value="${esc(d.editName ?? n.name)}" aria-label="새 이름"><button type="button" class="btn sm primary" data-act="cmRenameOk" ${S.busy ? 'disabled' : ''}>저장</button><button type="button" class="btn sm" data-act="cmCancel">취소</button></div>`;
           if (d.del === n.id) { const k = cnt(n.id), kids = (S.ix.catKids.get(n.id) || []).length, up = n.parent_id ? (S.ix.cat.get(n.parent_id) || {}).name : '분류 없음';
             return `<div class="lrow cmrow del" style="${pad(depth)}"><div class="main"><span class="t">「${esc(n.name)}」을(를) 지울까요?</span><span class="s">${[k ? `이 분류의 품목 ${k}개는 「${esc(up)}」으로 바뀝니다` : '이 분류를 쓰는 품목은 없습니다', kids ? `하위 분류 ${kids}개는 한 칸 위로 옮겨집니다` : ''].filter(Boolean).join(' · ')}</span></div><button type="button" class="btn sm danger" data-act="cmDeleteOk" ${S.busy ? 'disabled' : ''}>지우기</button><button type="button" class="btn sm" data-act="cmCancel">취소</button></div>`; }
-          return `<div class="lrow cmrow" style="${pad(depth)}"><span class="ic">${ic('tag')}</span><div class="main"><span class="t">${esc(n.name)}</span><span class="s">품목 ${cnt(n.id)}개</span></div><button type="button" class="btn sm" data-act="cmRename" data-id="${n.id}">${ic('edit')}이름</button><button type="button" class="btn sm danger" data-act="cmDelete" data-id="${n.id}" aria-label="${esc(n.name)} 지우기">${ic('trash')}</button></div>`;
+          return `<div class="lrow cmrow" style="${pad(depth)}"><span class="ic">${ic('tag')}</span><div class="main"><span class="t">${esc(n.name)}</span><span class="s">품목 ${cnt(n.id)}개</span></div><button type="button" class="btn sm edit" data-act="cmRename" data-id="${n.id}">${ic('edit')}이름</button><button type="button" class="btn sm danger" data-act="cmDelete" data-id="${n.id}" aria-label="${esc(n.name)} 지우기">${ic('trash')}</button></div>`;
         }).join('') : empty('tag', '아직 분류가 없습니다.', '위에 이름을 적고 「추가」를 누르세요.')}</div>
         <button type="button" class="btn block big" data-act="sheetClose">${S.sheet.back ? '다 했어요 · 품목 화면으로' : '닫기'}</button>`;
+      break;
+    }
+    case 'catSet': {
+      const c = S.ix.cat.get(d.id); if (!c) { S.sheet = null; return ''; }
+      const none = csPool({ ...d, src: 'none', q: '' }).length, other = csPool({ ...d, src: 'other', q: '' }).length, n = (d.sel || []).length;
+      h = sheetHead('분류 설정', esc(catPathText(c.id))) + `<div class="field"><label for="sh-csn">분류 이름</label><div class="toolbar nowrap"><input id="sh-csn" maxlength="100" data-bind="name" value="${esc(d.name ?? c.name)}" autocomplete="off"><button type="button" class="btn edit" data-act="csRename" ${S.busy ? 'disabled' : ''}>${ic('edit')}이름 저장</button></div></div>
+        <div class="subsec"><div class="subsec-h">${ic('in')}품목 가져오기</div>
+          <p class="hint" style="margin:0">고른 품목을 「${esc(c.name)}」 분류로 옮깁니다. 여러 개를 한 번에 고를 수 있습니다.</p>
+          <div class="seg block" role="group" aria-label="어디서 가져올지"><button type="button" data-act="csSrc" data-v="none" aria-pressed="${(d.src || 'none') === 'none'}">분류 없음 <b>${none}</b></button><button type="button" data-act="csSrc" data-v="other" aria-pressed="${d.src === 'other'}">다른 분류 <b>${other}</b></button></div>
+          <div class="search">${ic('search')}<input id="sh-csq" data-bind="q" data-live value="${esc(d.q || '')}" placeholder="품명·규격 검색" autocomplete="off" aria-label="가져올 품목 검색"></div>
+          <div class="toolbar"><button type="button" class="btn sm" data-act="csAll">${ic('check')}보이는 것 모두 고르기</button>${n ? `<button type="button" class="btn sm ghost" data-act="csNone">고른 것 풀기</button>` : ''}<span class="grow"></span><span class="muted" id="cs-count" style="font-size:13px">${n}개 고름</span></div>
+          <div class="pickgrid cslist" id="cs-list">${csList(d)}</div></div>
+        ${sheetErr()}
+        <button class="btn primary block big" data-act="sheetOk" data-write id="cs-ok" ${S.busy || !n ? 'disabled' : ''}>${S.busy ? '옮기는 중…' : n ? `고른 ${n}개 가져오기` : '가져올 품목을 고르세요'}</button>
+        <button type="button" class="btn danger ghost block" data-act="catDelete" data-id="${c.id}" data-write>${ic('trash')}이 분류 지우기</button>`;
       break;
     }
     case 'memo':
@@ -2772,6 +2799,12 @@ ACT.sheetOk = () => {
     loc: () => { if (!(d.name || '').trim()) return bad('위치 이름을 입력하세요.'); d.code = String(d.code || '').trim().toUpperCase(); if (/\s/.test(d.code)) return bad('라벨 코드에는 빈칸을 넣지 마세요. (예: WH-S5)'); return run(() => A.saveLocation(d), d.id ? '저장했습니다' : '위치를 추가했습니다', d.id ? {} : { op: d.op_id, label: `위치 추가 · ${d.name.trim()}` }); },
     cat: () => { if (!(d.name || '').trim()) return bad('분류 이름을 입력하세요.'); return run(() => A.saveCategory(d), '저장했습니다', d.id ? {} : { op: d.op_id, label: `분류 추가 · ${d.name.trim()}` }); },
     mkdir: () => { const n = (d.name || '').trim(); if (!n) return bad('폴더 이름을 입력하세요.'); if (/[\/\\]/.test(n)) return bad('폴더 이름에 / 나 \\ 는 쓸 수 없습니다.'); return run(() => A.mkdir(d), '폴더를 만들었습니다'); },
+    catSet: () => {
+      const c = S.ix.cat.get(d.id); const ids = (d.sel || []).filter(id => S.ix.item.has(id));
+      if (!c) { S.sheet = null; return render(); }
+      if (!ids.length) return bad('가져올 품목을 고르세요.');
+      return run(() => A.itemsSetCategory(ids, c.id, d.op_id), n => `품목 ${typeof n === 'number' ? n : ids.length}개를 「${c.name}」으로 옮겼습니다`, { op: d.op_id, label: `분류로 가져오기 · ${c.name} ${ids.length}개` });
+    },
     folderSet: () => {
       const f = S.ix.folder.get(d.id); if (!f) { S.sheet = null; return render(); }
       const n = (d.name || '').trim(); if (!n) return bad('폴더 이름을 입력하세요.'); if (/[\/\\]/.test(n)) return bad('폴더 이름에 / 나 \\ 는 쓸 수 없습니다.');
@@ -2803,7 +2836,7 @@ const CONFIRM = {
   cancelTx: d => run(() => S.api.stockCancel({ tx_id: d.id, op_id: d.op_id }), '취소했습니다 · 수량이 원래대로 돌아갔습니다', { op: d.op_id, label: '기록 취소' }),
   itemDelete: d => run(() => S.api.deleteItem(d.id), '품목을 휴지통으로 옮겼습니다').then(ok => { if (ok) back(); }),
   locDelete: d => run(() => S.api.deleteLocation(d.id), '위치를 지웠습니다').then(ok => { if (ok && route().node === d.id) back(); }),
-  catDelete: d => run(() => S.api.deleteCategory(d.id), '분류를 지웠습니다'),
+  catDelete: d => run(() => S.api.deleteCategory(d.id), '분류를 지웠습니다').then(ok => { if (ok && route().node === d.id) back(); }),
   folderDelete: d => run(() => S.api.deleteFolder(d.id), '폴더를 휴지통으로 옮겼습니다').then(ok => { if (ok) back(); }),
   docDelete: d => run(() => S.api.deleteDoc(d.id), '파일을 휴지통으로 옮겼습니다').then(ok => { if (ok) back(); }),
   rejectUser: d => run(() => S.api.reject(d.id), '신청을 거절했습니다'),
@@ -2859,6 +2892,19 @@ Object.assign(ACT, {
     ask(t.type === 'out' ? '출고를 취소할까요?' : TX_NAME[t.type] + '을 취소할까요?', `${personName(t.user_id)} · ${fmtWhen(t.created_at)} · ${itemTitle(it)} ${t.qty}${unit}. ${t.type === 'out' ? (locPathText(t.from_loc) || '원래 위치') + '에 수량이 다시 더해집니다.' : '수량이 기록 전 상태로 돌아갑니다.'}`, 'cancelTx', { id: d.id, ok: '취소하기' }); },
 
   itemNew: () => { const cat = (route().mode || S.itemsMode) === 'cat'; const n = route().node; openSheet('item', { unit: '개', category_id: cat ? n || '' : '', init_loc: !cat && n && S.ix.loc.has(n) ? n : null }); },
+  catSet: d => { const c = S.ix.cat.get(d.id); if (c) { openSheet('catSet', { id: c.id, name: c.name, src: 'none', sel: [], q: '' }); S.sheetFocused = true; } },
+  csSrc: d => { const s = S.sheet; if (!s) return; s.d.src = d.v; s.d.sel = []; render(); },
+  csSel: (d, el) => { const s = S.sheet; if (!s) return; const set = new Set(s.d.sel || []); el.checked ? set.add(d.id) : set.delete(d.id); s.d.sel = [...set]; csRefresh(); },
+  csAll: () => { const s = S.sheet; if (!s) return; s.d.sel = [...new Set([...(s.d.sel || []), ...csPool(s.d).map(i => i.id)])]; render(); },
+  csNone: () => { const s = S.sheet; if (!s) return; s.d.sel = []; render(); },
+  csRename: async () => {
+    const s = S.sheet; if (!s || S.busy) return; const c = S.ix.cat.get(s.d.id); if (!c) return;
+    const name = String(s.d.name || '').trim(); if (!name) { s.err = '분류 이름을 적으세요.'; return render(); }
+    if (name === c.name) return toast('이름이 그대로입니다');
+    if (S.cache.categories.some(x => x.id !== c.id && (x.parent_id || null) === (c.parent_id || null) && x.name.trim() === name)) { s.err = `「${name}」은(는) 이미 있습니다.`; return render(); }
+    const ok = await run(() => S.api.saveCategory({ id: c.id, name }), null, { keepSheet: true });
+    if (ok && S.sheet === s) { render(); toast(`「${c.name}」 → 「${name}」으로 바꿨습니다`); }
+  },
   catManage: () => { const s = S.sheet; S.sheet = { type: 'catManage', d: { op_id: opId() }, err: '', back: s && s.type === 'item' ? s : null }; S.sheetFocused = true; render(); },
   cmAdd: async () => {
     const s = S.sheet; if (!s || S.busy) return; const d = s.d; const name = String(d.add || '').trim();
@@ -2981,6 +3027,23 @@ function printPosterNow() {
   let t; const done = () => { clearTimeout(t); window.removeEventListener('afterprint', done); document.body.classList.remove('print-poster'); box.innerHTML = ''; };
   window.addEventListener('afterprint', done); t = setTimeout(done, 120000);
   window.print();
+}
+/* 분류 설정 › 품목 가져오기 목록 */
+function csPool(d) {
+  const q = String(d.q || '').trim().toLowerCase();
+  return S.cache.items.filter(i => (d.src === 'other' ? i.category_id && S.ix.cat.has(i.category_id) && i.category_id !== d.id : !i.category_id || !S.ix.cat.has(i.category_id)))
+    .filter(i => !q || smatch([i.name, i.spec, i.maker, i.models].join(' '), q))
+    .sort((a, b) => a.name.localeCompare(b.name, 'ko') || (a.spec || '').localeCompare(b.spec || '', 'ko', { numeric: true }));
+}
+function csList(d) {
+  const sel = new Set(d.sel || []); const rows = csPool(d);
+  return rows.map(i => `<label class="pick cspick"><input type="checkbox" data-act="csSel" data-id="${i.id}" ${sel.has(i.id) ? 'checked' : ''}><div class="main"><span>${esc(itemTitle(i))}</span><span class="s">${esc([d.src === 'other' ? catPathText(i.category_id) : '', i.maker].filter(Boolean).join(' · ') || ' ')}</span></div><span class="qty">${total(i.id)}<small>${esc(i.unit)}</small></span></label>`).join('')
+    || `<div class="empty">${d.q ? '찾는 품목이 없습니다.' : d.src === 'other' ? '다른 분류에 품목이 없습니다.' : '분류 없는 품목이 없습니다.'}</div>`;
+}
+function csRefresh() { // 체크만 바뀌면 목록은 두고 숫자와 단추만 바꾼다 (목록 스크롤이 그대로 남게)
+  const s = S.sheet; if (!s || s.type !== 'catSet') return; const n = (s.d.sel || []).length;
+  const c = $('#cs-count'); if (c) c.textContent = n + '개 고름';
+  const b = $('#cs-ok'); if (b) { b.disabled = !n || S.busy; b.textContent = n ? `고른 ${n}개 가져오기` : '가져올 품목을 고르세요'; }
 }
 const descFolders = id => { const out = [id]; for (let i = 0; i < out.length; i++) (S.ix.folderKids.get(out[i]) || []).forEach(k => out.push(k.id)); return { f: out.length - 1, d: out.reduce((a, f) => a + (S.ix.docsIn.get(f) || []).length, 0) }; };
 
