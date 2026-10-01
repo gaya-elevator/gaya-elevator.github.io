@@ -123,10 +123,10 @@ main{flex:1;padding:16px 16px calc(var(--tabh) + 30px + env(safe-area-inset-bott
 @media (prefers-color-scheme:dark){:root:not([data-theme="light"]) .btn.out,:root:not([data-theme="light"]) .btn.in{color:#0A1122}}
 .btn.ghost{background:transparent}
 .btn.danger{color:var(--crit);border-color:color-mix(in srgb,var(--crit) 40%,var(--line))}
-/* 단추 역할 — 색은 네 가지만: 파랑 꽉 찬 단추 = 그 화면의 주요 동작 / 연파랑 = 새로 만들기·넣기 / 흰 테두리 = 보기·보내기 / 회색 = 고치기·설정 / 빨강 글자 = 지우기·취소 */
-.btn.add{background:var(--accent-soft);border-color:transparent;color:var(--accent)}
-.btn.add:hover{border-color:color-mix(in srgb,var(--accent) 45%,transparent)}
-.btn.edit{background:color-mix(in srgb,var(--muted) 17%,var(--surface));border-color:transparent;color:var(--ink)}
+/* 단추 역할: 파랑 꽉 찬 단추 = 그 화면의 주요 동작 / 연초록 = 새로 만들기·넣기 / 흰 테두리 = 보기·보내기 / 회색 = 고치기·설정 / 빨강 글자 = 지우기·취소 */
+.btn.add{background:var(--ok-soft);border-color:color-mix(in srgb,var(--ok) 22%,transparent);color:var(--ok)}
+.btn.add:hover{border-color:color-mix(in srgb,var(--ok) 55%,transparent)}
+.btn.edit{background:color-mix(in srgb,var(--muted) 20%,var(--surface));border-color:transparent;color:var(--ink)}
 .btn.edit svg{color:var(--muted)}
 .btn.edit:hover{border-color:var(--line)}
 .btn.danger.ghost{border-color:transparent;background:transparent}
@@ -138,10 +138,29 @@ main{flex:1;padding:16px 16px calc(var(--tabh) + 30px + env(safe-area-inset-bott
 .btn.big{min-height:54px;font-size:16.5px;border-radius:var(--r)}
 
 .sec{display:flex;flex-direction:column;gap:9px}
-.sec-h{display:flex;align-items:center;justify-content:space-between;gap:8px;min-height:24px}
-.sec-h h2{font-size:14px;font-weight:700;color:var(--ink);margin:0;display:flex;align-items:center;gap:7px}
+.sec-h{display:flex;align-items:center;justify-content:space-between;gap:8px;min-height:24px;flex-wrap:wrap;row-gap:8px}
+.sec-h h2{font-size:14px;font-weight:700;color:var(--ink);margin:0;display:flex;align-items:center;gap:7px;white-space:nowrap}
 .sec-h h2::before{content:"";width:4px;height:14px;border-radius:2px;background:var(--accent)}
 .sec-h .aside{font-size:12.5px;color:var(--muted)}
+.sec-acts{display:flex;gap:6px;margin-left:auto}
+
+/* 칸마다 다른 색 — 자재 첫 화면 위 6칸, 큰 칸(자주 쓰는 품목·재고 부족·보관 위치·최근 입출고 …)마다 바탕·머리 아이콘 색, 더보기 메뉴 아이콘 */
+.tone-red{--tone:#C42F2A}.tone-orange{--tone:#C2560F}.tone-amber{--tone:#A86B00}.tone-green{--tone:#1B8753}.tone-teal{--tone:#0F7787}.tone-blue{--tone:#2453C6}.tone-violet{--tone:#6B3FCF}.tone-pink{--tone:#B42F6C}.tone-slate{--tone:#4D5B7A}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]) .tone-red{--tone:#FF8B82}:root:not([data-theme="light"]) .tone-orange{--tone:#FFA066}:root:not([data-theme="light"]) .tone-amber{--tone:#F2BF5E}:root:not([data-theme="light"]) .tone-green{--tone:#5DD79B}:root:not([data-theme="light"]) .tone-teal{--tone:#62CFDD}:root:not([data-theme="light"]) .tone-blue{--tone:#86ABFF}:root:not([data-theme="light"]) .tone-violet{--tone:#B9A0FF}:root:not([data-theme="light"]) .tone-pink{--tone:#F58BBE}:root:not([data-theme="light"]) .tone-slate{--tone:#A9B6D0}}
+:root[data-theme="dark"] .tone-red{--tone:#FF8B82}:root[data-theme="dark"] .tone-orange{--tone:#FFA066}:root[data-theme="dark"] .tone-amber{--tone:#F2BF5E}:root[data-theme="dark"] .tone-green{--tone:#5DD79B}:root[data-theme="dark"] .tone-teal{--tone:#62CFDD}:root[data-theme="dark"] .tone-blue{--tone:#86ABFF}:root[data-theme="dark"] .tone-violet{--tone:#B9A0FF}:root[data-theme="dark"] .tone-pink{--tone:#F58BBE}:root[data-theme="dark"] .tone-slate{--tone:#A9B6D0}
+.sec[class*="tone-"]{background:color-mix(in srgb,var(--tone) 6%,var(--bg));border:1px solid color-mix(in srgb,var(--tone) 17%,var(--bg));border-radius:16px;padding:11px 10px 10px}
+.sec[class*="tone-"]>.sec-h{padding:0 2px}
+.sec[class*="tone-"]>.sec-h .btn.sm{padding:0 10px}
+:root[data-theme="dark"] .sec[class*="tone-"]{background:color-mix(in srgb,var(--tone) 9%,var(--bg));border-color:color-mix(in srgb,var(--tone) 24%,var(--bg))}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]) .sec[class*="tone-"]{background:color-mix(in srgb,var(--tone) 9%,var(--bg));border-color:color-mix(in srgb,var(--tone) 24%,var(--bg))}}
+.sec[class*="tone-"]>.sec-h h2::before{display:none}
+.sec-h h2 .hic{flex:none;width:26px;height:26px;border-radius:8px;display:grid;place-items:center;background:var(--tone,var(--accent));color:var(--surface)}
+.sec-h h2 .hic svg{width:15px;height:15px;stroke-width:2.1}
+.stile[class*="tone-"],.quicklinks button[class*="tone-"]{background:color-mix(in srgb,var(--tone) 10%,var(--surface));border-color:color-mix(in srgb,var(--tone) 26%,var(--surface))}
+.stile[class*="tone-"] .k{color:var(--tone)}
+.quicklinks button[class*="tone-"] svg{color:var(--tone)}
+.lrow[class*="tone-"] .ic{background:color-mix(in srgb,var(--tone) 15%,var(--surface));color:var(--tone)}
+.sec[class*="tone-"] .lrow .ic{background:color-mix(in srgb,var(--tone) 14%,var(--surface));color:var(--tone)}
 
 /* 요약 타일 (자재 첫 화면) */
 .stats{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}
