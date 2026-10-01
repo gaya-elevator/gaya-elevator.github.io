@@ -10,7 +10,7 @@ const CONFIG = Object.assign({
   STORAGE_WARN: 0.8
 }, window.GAYA_CONFIG || {});
 const DEMO = !CONFIG.SUPABASE_URL;
-const APP_VER = 'c82f7e38';
+const APP_VER = '5a7097ad';
 
 /* ───────── 작은 도구들 ───────── */
 const $ = (s, r = document) => r.querySelector(s);
@@ -231,6 +231,8 @@ const P = {
   phone: '<rect x="7" y="2.5" width="10" height="19" rx="2"/><path d="M11 18.5h2"/>',
   iosShare: '<path d="M12 3.5v11M8.5 7 12 3.5 15.5 7"/><path d="M8 10H6v10h12V10h-2"/>',
   clock: '<circle cx="12" cy="12" r="8.5"/><path d="M12 7.5V12l3 2"/>',
+  gear: '<circle cx="12" cy="12" r="3"/><path d="M12 2.8v2.4M12 18.8v2.4M2.8 12h2.4M18.8 12h2.4M5.5 5.5l1.7 1.7M16.8 16.8l1.7 1.7M5.5 18.5l1.7-1.7M16.8 7.2l1.7-1.7"/><circle cx="12" cy="12" r="6.6"/>',
+  calendar: '<rect x="3.5" y="5" width="17" height="15.5" rx="2"/><path d="M8 3v4M16 3v4M3.5 10h17"/>',
   history: '<path d="M4 12a8 8 0 1 0 2.4-5.7L4 8.5"/><path d="M4 4v4.5h4.5M12 8v4l2.8 1.8"/>',
   sun: '<circle cx="12" cy="12" r="4"/><path d="M12 2.5v2M12 19.5v2M2.5 12h2M19.5 12h2M5.3 5.3l1.4 1.4M17.3 17.3l1.4 1.4M5.3 18.7l1.4-1.4M17.3 6.7l1.4-1.4"/>',
   moon: '<path d="M20 14.5A8 8 0 0 1 9.5 4a8 8 0 1 0 10.5 10.5z"/>',
@@ -592,9 +594,19 @@ function makeDemoAPI() {
       const isNew = !x.id; const adm = can(u, 'item');
       if (isNew && !adm) fail('새 품목 등록은 관리자만 할 수 있습니다.');
       if ((isNew || x.name !== undefined) && !String(x.name || '').trim()) fail('품명을 입력하세요.');
+      if (adm && x.unit !== undefined && /^\s*\d/.test(x.unit || '')) fail('단위 칸에는 수량이 아니라 「개」「세트」「m」처럼 세는 말을 적습니다. 수량은 「처음 재고」나 「입고」로 넣으세요.');
       if (isNew) {
-        const it = { id: uid('i'), name: x.name.trim(), spec: x.spec || '', maker: x.maker || '', models: x.models || '', category_id: x.category_id || null, unit: x.unit || '개', min_qty: +x.min_qty || 0, photo: x.photo || '', memo: x.memo || '', created_at: now(), updated_at: now() };
-        D.items.push(it); log('품목 추가', 'item', it.id, itemLabel(it)); save(); return it.id;
+        if (x.op_id && D.ops && D.ops[x.op_id] != null) return D.ops[x.op_id];
+        const iq = String(x.init_qty ?? '').trim(); const wantStock = iq !== '' && iq !== '0';
+        if (wantStock && !/^\d{1,6}$/.test(iq)) fail('처음 재고 수량은 1 이상의 정수로 입력하세요.');
+        if (wantStock && !x.init_loc) fail('처음 재고를 넣을 위치를 고르세요.');
+        let cat = x.category_id || null; const nc = String(x.new_category || '').trim();
+        if (nc) { let c = D.categories.find(c => !c.deleted_at && !c.parent_id && c.name === nc); if (!c) { c = { id: uid('c'), parent_id: null, name: nc, sort: D.categories.length + 1 }; D.categories.push(c); log('분류 추가', 'category', c.id, nc); } cat = c.id; }
+        const it = { id: uid('i'), name: x.name.trim(), spec: x.spec || '', maker: x.maker || '', models: x.models || '', category_id: cat, unit: String(x.unit || '').trim() || '개', min_qty: +x.min_qty || 0, photo: x.photo || '', memo: x.memo || '', created_at: now(), updated_at: now() };
+        D.items.push(it); log('품목 추가', 'item', it.id, itemLabel(it));
+        if (wantStock) { stockRow(it.id, x.init_loc).qty += +iq; D.tx.unshift({ id: uid('t'), op_id: null, type: 'in', item_id: it.id, from_loc: null, to_loc: x.init_loc, qty: +iq, site: '', note: '처음 등록', user_id: u.id, created_at: now() }); log('입고', 'item', it.id, itemLabel(it) + ' ' + iq + it.unit + ' → ' + locPath(x.init_loc)); }
+        if (x.op_id) { D.ops = D.ops || {}; D.ops[x.op_id] = it.id; }
+        save(); return it.id;
       }
       const it = byId(D.items, x.id);
       const fields = adm ? ['name', 'spec', 'maker', 'models', 'category_id', 'unit', 'min_qty', 'photo', 'memo'] : ['memo', 'photo'];
@@ -670,6 +682,17 @@ function makeDemoAPI() {
       await tick(); need('folderAdmin'); const f = byId(D.folders, id); const old = folderPath(id);
       if (!String(name || '').trim()) fail('폴더 이름을 입력하세요.');
       f.name = name.trim(); log('폴더 이름 변경', 'folder', id, old + ' → ' + f.name); save();
+    },
+    async folderSettings(id, { auto_sort, sort_mode, notify_new }) {
+      await tick(); need('folderAdmin'); const f = byId(D.folders, id); if (!f || f.deleted_at) fail('폴더를 찾지 못했습니다. 화면을 새로 고친 뒤 다시 하세요.');
+      if (!['new', 'name'].includes(sort_mode || 'new')) fail('파일 순서 값이 올바르지 않습니다.');
+      const ch = [];
+      if (!!auto_sort !== !!f.auto_sort) ch.push('날짜별 자동 정리 ' + (auto_sort ? '켬' : '끔'));
+      if ((sort_mode || 'new') !== (f.sort_mode || 'new')) ch.push('파일 순서 ' + (sort_mode === 'name' ? '이름 순' : '최근 올린 순'));
+      if (!!notify_new !== !!f.notify_new) ch.push('새 자료 알림 ' + (notify_new ? '켬' : '끔'));
+      if (!ch.length) return;
+      f.auto_sort = !!auto_sort; f.sort_mode = sort_mode || 'new'; f.notify_new = !!notify_new;
+      log('폴더 설정', 'folder', id, folderPath(id) + ' (' + ch.join(', ') + ')'); save();
     },
     async moveFolder(id, parent_id) {
       await tick(); need('folderAdmin');
@@ -946,11 +969,50 @@ function makeDemoAPI() {
    체험판(makeDemoAPI)과 같은 이름·같은 동작의 함수를 제공한다.
    저장은 전부 서버 함수(RPC)로 하며, 권한 확인과 활동 기록은 서버가 한다.
    자료 파일 실물은 구글 앱스 스크립트(DRIVE_STORES)를 거쳐 회사용 구글 드라이브에 저장한다. */
+/* 끊긴 연결 다시 보내기
+   폰이 몇 분 쉬었다가 처음 보내는 저장은, 폰이 이미 끊긴 연결로 보내 답을 못 받고 멈추는 일이 있다.
+   (서버 기록에 그 요청이 아예 없고, 한 번 더 누르면 바로 됨) 그래서
+   · 다시 보내도 안전한 요청(목록 받기, 요청 번호가 붙은 저장 — 서버가 같은 번호는 한 번만 처리)은
+     12초 안에 답이 없으면 새로 보낸다 (최대 3번)
+   · 로그인 연장 같은 나머지 요청은 예전처럼 한 번만 25초 기다린다 */
+const RETRY_RPC = new Set(['op_done', 'trash_list', 'push_key', 'push_subscribe', 'push_unsubscribe', 'folder_ensure', 'notif_read_all', 'folder_settings', 'user_set_role', 'user_set_active']);
+function canRetry(url, o) {
+  const m = String(o.method || 'GET').toUpperCase();
+  if (m === 'GET' || m === 'HEAD') return /\/rest\/v1\//.test(url) ? 'read' : '';
+  const r = /\/rest\/v1\/rpc\/([a-z_]+)/.exec(url); if (!r || m !== 'POST') return '';
+  const b = typeof o.body === 'string' ? o.body : '';
+  if (RETRY_RPC.has(r[1]) || /"p_op":"[0-9a-f-]{36}"/.test(b) || (r[1] === 'item_save' && /^\{"p":\{"id":"[0-9a-f-]{36}"/.test(b))) return 'write';
+  return '';
+}
+let lastNet = Date.now(), lastTouch = Date.now();
+['pointerdown', 'keydown', 'input'].forEach(t => document.addEventListener(t, () => { lastTouch = Date.now(); }, { capture: true, passive: true }));
+async function sbFetch(u, o = {}) {
+  const url = typeof u === 'string' ? u : (u && u.url) || String(u); const kind = canRetry(url, o);
+  const waits = kind ? [12000, 15000, 25000] : [25000];
+  for (let i = 0; ; i++) {
+    try {
+      const r = await fetchT(u, o, waits[i]); lastNet = Date.now();
+      if (i && S.toast && S.toast.progress && /다시 보내는 중/.test(S.toast.msg)) progress(null);
+      return r;
+    } catch (e) {
+      if ((o.signal && o.signal.aborted) || i >= waits.length - 1 || navigator.onLine === false) throw e;
+      if (kind === 'write') progress(`연결이 약해 다시 보내는 중… (${i + 2}/${waits.length})`);
+      await new Promise(r => setTimeout(r, 500 * (i + 1)));
+    }
+  }
+}
 function makeLiveAPI() {
   const sb = window.supabase.createClient(CONFIG.SUPABASE_URL, CONFIG.SUPABASE_ANON_KEY, {
     auth: { persistSession: true, autoRefreshToken: true, storageKey: 'gaya-auth' },
-    global: { fetch: (u, o) => fetchT(u, o, 25000) } // 25초 넘게 답이 없으면 「연결 끊김」으로 본다
+    global: { fetch: sbFetch }
   });
+  // 앱을 쓰는 동안(3분 안에 화면을 만졌으면) 연결이 식지 않게 25초마다 아주 작은 요청을 보낸다.
+  // 품목을 적는 몇 분 사이에 연결이 끊겨 「저장」이 멈추던 일을 막는다. 화면을 끄거나 다른 앱으로 가면 보내지 않는다.
+  setInterval(() => {
+    if (document.hidden || !S.user || !online() || S.busy) return;
+    const now = Date.now(); if (now - lastNet < 25000 || now - lastTouch > 180000) return;
+    lastNet = now; sb.from('categories').select('id', { head: true }).limit(1).then(() => {}, () => {});
+  }, 5000);
   let me = null;
   const email = emp => String(emp).trim().toLowerCase() + '@' + CONFIG.EMAIL_DOMAIN;
   const AUTH_MSG = '로그인이 풀렸습니다. 다시 로그인해 주세요. (다른 기기에서 로그아웃했거나 오래 쓰지 않으면 이렇게 됩니다)';
@@ -1163,7 +1225,7 @@ function makeLiveAPI() {
     stockCancel: d => rpc('stock_cancel', { p_tx: d.tx_id, p_op: d.op_id }),
     stockAdjust: d => rpc('stock_adjust', { p_item: d.item_id, p_loc: d.location_id, p_qty: +d.qty, p_reason: d.reason || '', p_op: d.op_id }),
 
-    saveItem: x => { const p = { ...x }; delete p.op_id; delete p.created_at; delete p.updated_at; delete p.deleted_at; delete p.countLoc; return rpc('item_save', { p, p_op: p.id ? null : (x.op_id || null) }); },
+    saveItem: x => { const p = { ...x }; ['op_id', 'created_at', 'updated_at', 'deleted_at', 'countLoc', 'cat_new'].forEach(k => delete p[k]); return rpc('item_save', { p, p_op: p.id ? null : (x.op_id || null) }); },
     deleteItem: id => rpc('item_delete', { p_id: id }),
     bulkItems: (rows, op) => rpc('items_bulk', { p_rows: rows, p_op: op || null }),
     saveLocation: x => rpc('location_save', { p: { id: x.id || null, parent_id: x.parent_id || null, name: String(x.name || '').trim(), code: String(x.code || '').trim().toUpperCase(), photo: x.photo || '' }, p_op: x.id ? null : (x.op_id || null) }),
@@ -1173,6 +1235,7 @@ function makeLiveAPI() {
 
     mkdir: ({ parent_id, name, auto_sort }) => rpc('folder_create', { p_parent: parent_id || null, p_name: name, p_auto: !!auto_sort }),
     async renameFolder(id, name) { const old = pathNames(id); await rpc('folder_rename', { p_id: id, p_name: name }); await driveAll('renamePath', { path: old, name: String(name).trim() }); },
+    folderSettings: (id, { auto_sort, sort_mode, notify_new }) => rpc('folder_settings', { p_id: id, p_auto: !!auto_sort, p_sort: sort_mode || 'new', p_notify: !!notify_new }),
     async moveFolder(id, parent_id) { const old = pathNames(id); await rpc('folder_move', { p_id: id, p_parent: parent_id || null }); await driveAll('movePath', { path: old, to: parent_id ? pathNames(parent_id) : [] }); },
     async deleteFolder(id) { const p = pathNames(id); await rpc('folder_delete', { p_id: id }); await driveAll('trashPath', { path: p }); },
     async upload(folder_id, file) {
@@ -1487,7 +1550,9 @@ async function run(fn, okMsg, { keepSheet = false, reload = true, op = null, lab
     S.already = true; r = true;
   }
   if (op) { const p = pendGet(); if (p && p.op === op) pendSet(null); }
-  if (reload) { try { await loadCache(); } catch { /* 저장은 끝남. 목록은 다음 새로 고침 때 맞춰진다 */ } }
+  if (reload) { // 저장은 끝남. 새 목록이 8초 안에 안 오면 기다리지 않고 닫고, 오는 대로 다시 그린다
+    const lc = loadCache(); try { await withTimeout(lc, 8000); } catch { lc.then(() => { if (!S.busy) render(); }).catch(() => {}); }
+  }
   if (!keepSheet && S.sheet === sh) S.sheet = null;
   S.busy = false; render();
   if (S.already) note('앞에서 누른 저장이 이미 되어 있었습니다. 두 번 저장하지 않았습니다.');
@@ -1621,6 +1686,34 @@ let composing = false, renderPending = false;
 document.addEventListener('compositionstart', () => { composing = true; });
 document.addEventListener('compositionend', () => { composing = false; if (renderPending) { renderPending = false; setTimeout(render, 0); } });
 const KEEP_SEL = 'input[id]:not([type=file]):not([type=checkbox]):not([type=radio]):not([data-bind]),textarea[id]:not([data-bind])';
+/* 화면 바꿔 넣기. data-keep 이 붙은 칸(드라이브 미리보기 창 등)은 새 화면에도 같은 이름으로 있으면 그대로 두고
+   그 둘레만 바꾼다. 미리보기 창을 지웠다 다시 만들면 무거운 드라이브 화면을 처음부터 다시 받느라
+   폰이 몇 초 동안 터치를 받지 못한다 (☆ 누를 때마다 생기던 문제) */
+function setApp(html) {
+  const app = $('#app'); const keep = app.querySelector('[data-keep]');
+  if (keep) {
+    const tpl = document.createElement('template'); tpl.innerHTML = html;
+    const twin = [...tpl.content.querySelectorAll('[data-keep]')].find(n => n.dataset.keep === keep.dataset.keep);
+    if (twin && keepPatch(app, tpl.content, keep, twin)) return;
+  }
+  app.innerHTML = html;
+}
+function keepPatch(app, root, keep, twin) {
+  const oc = [], nc = [];
+  for (let n = keep; n && n !== app; n = n.parentNode) oc.unshift(n);
+  for (let n = twin; n && n !== root; n = n.parentNode) nc.unshift(n);
+  if (oc.length !== nc.length || oc.some((n, i) => n.tagName !== nc[i].tagName)) return false;
+  let op = app, np = root;
+  for (let i = 0; i < oc.length; i++) {
+    const o = oc[i], n = nc[i];
+    [...op.childNodes].forEach(c => { if (c !== o) c.remove(); });
+    const kids = [...np.childNodes], at = kids.indexOf(n);
+    o.before(...kids.slice(0, at)); o.after(...kids.slice(at + 1));
+    if (o !== keep) { [...o.attributes].forEach(a => { if (!n.hasAttribute(a.name)) o.removeAttribute(a.name); }); [...n.attributes].forEach(a => { if (o.getAttribute(a.name) !== a.value) o.setAttribute(a.name, a.value); }); }
+    op = o; np = n;
+  }
+  return true;
+}
 function render() {
   const a = document.activeElement;
   if (composing && a && (a.tagName === 'INPUT' || a.tagName === 'TEXTAREA')) { renderPending = true; return; }
@@ -1629,7 +1722,7 @@ function render() {
   const keep = {}; document.querySelectorAll('#app ' + KEEP_SEL.split(',').join(',#app ') + ',#overlay ' + KEEP_SEL.split(',').join(',#overlay ')).forEach(el => { if (!el.hasAttribute('data-nokeep')) keep[el.id] = el.value; });
   const sy = S.sheet ? ($('.sheet') || {}).scrollTop : null;
   const forced = !!(S.user && S.user.status === 'active' && S.user.must_change_pw); // 임시 비밀번호로 들어왔으면 새 비밀번호부터
-  $('#app').innerHTML = forced ? forcePwView() : S.user && S.user.status === 'active' && S.cache ? shell() : authView();
+  setApp(forced ? forcePwView() : S.user && S.user.status === 'active' && S.cache ? shell() : authView());
   $('#overlay').innerHTML = S.sheet && !forced ? sheetView() : '';
   for (const id in keep) { const n = document.getElementById(id); if (n && n.value !== keep[id] && (n.tagName === 'INPUT' || n.tagName === 'TEXTAREA')) n.value = keep[id]; }
   drawToast();
@@ -1995,13 +2088,14 @@ VIEW['docs.browse'] = r => {
       <p class="muted" style="font-size:12.5px;margin:0">파일 이름뿐 아니라 PDF·문서 안의 글자까지 찾습니다. 스캔 이미지로만 된 PDF는 안쪽 글자가 잡히지 않을 수 있습니다.</p></section>`;
   } else {
     const kids = S.ix.folderKids.get(fid) || [];
-    const docs = (S.ix.docsIn.get(fid) || []).slice().sort((a, b) => b.created_at.localeCompare(a.created_at));
+    const byName = f && f.sort_mode === 'name';
+    const docs = (S.ix.docsIn.get(fid) || []).slice().sort(byName ? (a, b) => a.name.localeCompare(b.name, 'ko', { numeric: true }) : (a, b) => b.created_at.localeCompare(a.created_at));
     const adm = can(S.user, 'folderAdmin');
-    pane = `<div class="toolbar"><button class="btn sm" data-act="mkdir" data-write>${ic('folderPlus')}폴더 만들기</button>${fid ? `<button class="btn sm" data-act="addLink" data-write>${ic('link')}영상·링크</button>` : ''}<span class="grow"></span>${f && adm ? `<button class="btn sm ghost" data-act="folderMenu" data-id="${fid}" data-write>폴더 관리</button>` : ''}</div>
-      ${f && f.auto_sort ? `<div class="notice">${ic('info')}<span>이 폴더에 올린 파일은 날짜에 맞춰 <b>연도 › 월</b> 폴더로 자동 정리됩니다.</span></div>` : ''}
+    pane = `<div class="toolbar fill"><button class="btn sm" data-act="mkdir" data-write>${ic('folderPlus')}폴더 만들기</button>${fid ? `<button class="btn sm" data-act="addLink" data-write>${ic('link')}영상·링크</button>` : ''}${f && adm ? `<button class="btn sm" data-act="folderSet" data-id="${fid}" data-write>${ic('gear')}폴더 설정</button>` : ''}</div>
+      ${f && (f.auto_sort || f.notify_new) ? `<div class="notice">${ic('info')}<span>${[f.auto_sort ? '이 폴더에 올린 파일은 날짜에 맞춰 <b>연도 › 월</b> 폴더로 자동 정리됩니다.' : '', f.notify_new ? '여기에 자료를 올리면 모든 직원에게 <b>새 자료 알림</b>이 갑니다.' : ''].filter(Boolean).join(' ')}</span></div>` : ''}
       ${kids.length ? `<section class="sec"><div class="sec-h"><h2>폴더</h2></div><div class="ledger">${kids.map(k => { const n = (S.ix.docsIn.get(k.id) || []).length, m = (S.ix.folderKids.get(k.id) || []).length;
-        return `<button class="lrow" data-act="folder" data-id="${k.id}"><span class="folder-ic">${ic('folder')}</span><div class="main"><span class="t">${esc(k.name)}</span><span class="s">${[m ? '폴더 ' + m : '', n ? '파일 ' + n : ''].filter(Boolean).join(' · ') || '비어 있음'}${k.auto_sort ? ' · 날짜별 자동 정리' : ''}</span></div><span class="chev">${ic('chev')}</span></button>`; }).join('')}</div></section>` : (fid ? '' : `<div class="ledger">${empty('folder', '아직 폴더가 없습니다.', '「폴더 만들기」로 도면, 교육 자료 같은 폴더를 만드세요.')}</div>`)}
-      ${fid ? `<section class="sec"><div class="sec-h"><h2>파일</h2><span class="aside">${docs.length ? docs.length + '개 · 최근 올린 순' : ''}</span></div><div class="ledger">${docs.length ? docs.map(d => docRow(d)).join('') : empty('docs', '아직 파일이 없습니다.', '아래 「올리기」로 PDF·엑셀·사진 등을 그대로 올리세요.')}</div></section>` : ''}
+        return `<button class="lrow" data-act="folder" data-id="${k.id}"><span class="folder-ic">${ic('folder')}</span><div class="main"><span class="t">${esc(k.name)}</span><span class="s">${[m ? '폴더 ' + m : '', n ? '파일 ' + n : ''].filter(Boolean).join(' · ') || '비어 있음'}${k.auto_sort ? ' · 날짜별 자동 정리' : ''}${k.notify_new ? ' · 새 자료 알림' : ''}</span></div><span class="chev">${ic('chev')}</span></button>`; }).join('')}</div></section>` : (fid ? '' : `<div class="ledger">${empty('folder', '아직 폴더가 없습니다.', '「폴더 만들기」로 도면, 교육 자료 같은 폴더를 만드세요.')}</div>`)}
+      ${fid ? `<section class="sec"><div class="sec-h"><h2>파일</h2><span class="aside">${docs.length ? docs.length + '개 · ' + (byName ? '이름 순' : '최근 올린 순') : ''}</span></div><div class="ledger">${docs.length ? docs.map(d => docRow(d)).join('') : empty('docs', '아직 파일이 없습니다.', '아래 「올리기」로 PDF·엑셀·사진 등을 그대로 올리세요.')}</div></section>` : ''}
       ${!fid ? `<p class="muted" style="font-size:12.5px;margin:0">자료는 회사용 구글 드라이브에 저장되고, 앱 폴더와 같은 모양으로 정리됩니다.</p>` : ''}`;
     if (!fid) {
       const rc = recentDocs().map(id => S.ix.doc.get(id)).filter(Boolean).slice(0, 5);
@@ -2048,9 +2142,10 @@ VIEW['docs.doc'] = r => {
   if (!d) return { title: '자료', body: empty('docs', '지워졌거나 없는 파일입니다.') };
   const [k, lab] = fileKind(d.name, d.kind); const v = vd(); const adm = can(S.user, 'docAdmin');
   let viewer; const off = offInfo(d.id); const busy = S.offBusy && S.offBusy[d.id] != null;
-  if (off && offView(d) && !(S.driveView && S.driveView[d.id] && online())) viewer = `<div id="offview" data-id="${d.id}"></div>`;
+  const kept = S.viewer && S.viewer.id === d.id && S.viewer.orphan; // 내 저장함에서 뺐어도 이 화면을 보는 동안은 보던 그대로 둔다
+  if ((off || kept) && offView(d) && !(S.driveView && S.driveView[d.id] && online())) viewer = `<div id="offview" data-id="${d.id}" data-keep="off-${d.id}"></div>`;
   else if (d.kind === 'video' || d.kind === 'link') viewer = `<div class="viewer-page" style="aspect-ratio:16/9">${ic(d.kind === 'video' ? 'play' : 'link')}<div>${d.kind === 'video' ? '유튜브 영상' : '바깥 링크'}</div><a class="btn primary" href="${esc(d.url)}" target="_blank" rel="noopener">${d.kind === 'video' ? '유튜브에서 재생' : '링크 열기'}</a></div>`;
-  else if (!DEMO && d.drive_id && online()) viewer = `<iframe src="https://drive.google.com/file/d/${esc(d.drive_id)}/preview" style="width:100%;aspect-ratio:1/1.3;border:0;display:block" allow="autoplay" title="${esc(d.name)}"></iframe>`;
+  else if (!DEMO && d.drive_id && online()) viewer = `<iframe data-keep="drive-${d.id}" src="https://drive.google.com/file/d/${esc(d.drive_id)}/preview" style="width:100%;aspect-ratio:1/1.3;border:0;display:block" allow="autoplay" title="${esc(d.name)}"></iframe>`;
   else if (v.data) viewer = `<img src="${v.data}" alt="${esc(d.name)}" style="display:block;width:100%">`;
   else if (off) viewer = `<div class="viewer-page"><span class="ftype ft-${k}">${lab}</span><div><b style="color:var(--ink)">${esc(d.name)}</b></div><div>폰에 저장된 파일입니다. 전파가 없어도<br>「파일 열기」를 누르면 휴대폰 앱(엑셀·한글 등)으로 엽니다.</div><button class="btn primary" data-act="docDownload" data-id="${d.id}">${ic('download')}파일 열기</button></div>`;
   else viewer = `<div class="viewer-page"><span class="ftype ft-${k}">${lab}</span><div><b style="color:var(--ink)">${esc(d.name)}</b></div><div>${DEMO ? '체험판에서는 드라이브 미리보기가 열리지 않습니다.<br>☆ 를 누르면 내 저장함에 넣고 폰에 저장된 예시 파일로 보기를 해 볼 수 있습니다.' : '오프라인이라 파일을 열 수 없습니다.<br>☆ 로 「내 저장함」에 넣어 둔 자료는 폰에 저장돼 전파가 없어도 열립니다.'}</div></div>`;
@@ -2081,10 +2176,10 @@ VIEW['scan.scan'] = () => {
 /* ───────── 알림 ───────── */
 VIEW['alerts.list'] = () => {
   const list = vd().list;
-  const icn = { signup: 'user', low: 'warn', comment: 'chat', welcome: 'check' };
+  const icn = { signup: 'user', low: 'warn', comment: 'chat', welcome: 'check', newdoc: 'docs', pushtest: 'bell' };
   return { title: '알림', actions: list && list.some(n => !n.read_at) ? `<button class="btn sm" data-act="readAll" data-write>모두 읽음</button>` : '',
     body: `<div class="ledger">${!list ? loadingBox('bell') : list.length ? list.map(n => `<button class="lrow" data-act="notif" data-link="${esc(JSON.stringify(n.link || {}))}" style="${n.read_at ? '' : 'background:var(--accent-soft)'}"><span class="ic" style="${n.kind === 'low' ? 'color:var(--crit);background:var(--crit-soft)' : ''}">${ic(icn[n.kind] || 'bell')}</span><div class="main"><span class="t" style="font-weight:${n.read_at ? 500 : 700}">${esc(n.title)}</span><span class="s">${esc(n.body || '')} · ${fmtWhen(n.created_at)}</span></div></button>`).join('') : empty('bell', '새 알림이 없습니다.', '내 자재·자료에 댓글이 달리거나 재고가 부족해지면 여기에 쌓입니다.')}</div>
-    <p class="muted" style="font-size:12.5px;margin:0">휴대폰 알림(푸시)은 2차 업데이트에서 켤 수 있게 됩니다. 아이폰은 홈 화면에 추가한 경우에만 됩니다.</p>` };
+    <p class="muted" style="font-size:12.5px;margin:0">${DEMO ? '실제 앱에서는' : '앱을 닫아 두어도 받으려면'} 더보기 › <b>폰 알림 받기</b>를 켜세요. 아이폰은 홈 화면에 추가한 앱에서만 됩니다.</p>` };
 };
 
 /* ───────── 더보기 / 관리 ───────── */
@@ -2122,7 +2217,7 @@ VIEW['more.menu'] = () => {
     ${DEMO ? '' : (() => { const [ok, why] = pushState(); return `<section class="sec"><div class="sec-h"><h2>폰 알림</h2><span class="aside">이 기기 · ${esc(S.user.name)}</span></div><div class="ledger">
       <label class="lrow" style="cursor:${ok ? 'pointer' : 'default'}"><span class="ic">${ic('bell')}</span><div class="main"><span class="t">폰 알림 받기</span><span class="s">${esc(why)}</span></div><input type="checkbox" class="switch" data-act="pushToggle" ${pushOn() ? 'checked' : ''} ${ok || pushOn() ? '' : 'disabled'} aria-label="폰 알림 받기"></label>
       ${pushOn() ? `<div class="lrow"><span class="ic">${ic('share')}</span><div class="main"><span class="t">시험 알림 보내기</span><span class="s">누르면 몇 초 안에 이 폰으로 「폰 알림 시험」 알림이 옵니다</span></div><button class="btn sm" data-act="pushTest" data-write ${S.busy ? 'disabled' : ''}>보내기</button></div>` : ''}</div>
-      ${pushOn() ? `<p class="muted" style="font-size:12.5px;margin:0">알림이 오는 때: ${can(S.user, 'users') ? '재고가 최소 수량 아래로 내려갈 때 · 새 직원이 가입 신청을 할 때 · ' : ''}내가 댓글을 단 자재·자료나 내가 올린 자료에 다른 사람이 댓글을 달 때. 알림을 누르면 그 화면이 열립니다. 로그아웃하면 이 폰으로 오던 알림도 끊깁니다.</p>` : ''}</section>`; })()}
+      ${pushOn() ? `<p class="muted" style="font-size:12.5px;margin:0">알림이 오는 때: ${can(S.user, 'users') ? '재고가 최소 수량 아래로 내려갈 때 · 새 직원이 가입 신청을 할 때 · ' : ''}내가 댓글을 단 자재·자료나 내가 올린 자료에 다른 사람이 댓글을 달 때 · 「새 자료 알림」을 켜 둔 폴더에 자료가 올라올 때. 알림을 누르면 그 화면이 열립니다. 로그아웃하면 이 폰으로 오던 알림도 끊깁니다.</p>` : ''}</section>`; })()}
     <section class="sec"><div class="sec-h"><h2>알림 창 설정</h2><span class="aside">이 기기에만 저장</span></div><div class="ledger">
       ${[['done', 'check', '저장 완료 알림', '「출고했습니다」처럼 저장한 뒤 아래에 잠깐 뜨는 알림'], ['undo', 'undo', '되돌리기 버튼', '입고·출고·이동 직후 8초 동안 뜨는 「되돌리기」'], ['install', 'phone', '홈 화면 추가 안내', '자재 첫 화면 맨 위의 파란 상자']].map(([k, i, t, s]) => `<label class="lrow" style="cursor:pointer"><span class="ic">${ic(i)}</span><div class="main"><span class="t">${t}</span><span class="s">${s}</span></div><input type="checkbox" class="switch" data-act="pref" data-k="${k}" ${pref(k) ? 'checked' : ''} aria-label="${t}"></label>`).join('')}</div>
       <p class="muted" style="font-size:12.5px;margin:0">저장 실패·연결 끊김 같은 빨간 알림은 꺼도 항상 뜹니다.</p></section>
@@ -2130,7 +2225,8 @@ VIEW['more.menu'] = () => {
       <label class="lrow" style="cursor:pointer"><span class="ic">${ic('wifioff')}</span><div class="main"><span class="t">오프라인 흉내</span><span class="s">켜면 인터넷이 끊긴 것처럼 저장이 막힙니다</span></div><input type="checkbox" class="switch" id="fake-off" data-act="fakeOff" ${S.fakeOffline ? 'checked' : ''} aria-label="오프라인 흉내"></label>
       <button class="lrow" data-act="switchRole"><span class="ic">${ic('users')}</span><div class="main"><span class="t">다른 역할로 보기</span><span class="s">개발자 · 관리자 · 직원 화면 비교</span></div><span class="chev">${ic('chev')}</span></button>
       <button class="lrow" data-act="demoReset"><span class="ic">${ic('restore')}</span><div class="main"><span class="t">체험판 처음 상태로</span><span class="s">예시 데이터를 다시 채웁니다</span></div></button></div></section>` : ''}
-    <button class="btn block ghost" data-act="logout">${ic('logout')}로그아웃</button>`;
+    <button class="btn block ghost" data-act="logout">${ic('logout')}로그아웃</button>
+    <p class="appver">GAYA Hub · 화면 버전 ${esc(APP_VER)}</p>`;
   return { title: '더보기', body };
 };
 const moreCr = label => crumbs([{ label: '더보기', act: 'tab', data: { t: 'more' } }, { label }]);
@@ -2251,9 +2347,9 @@ VIEW['more.guide'] = () => {
     <h3>자재 쓰는 법</h3><ol><li>가운데 <b>스캔</b>으로 선반 QR을 찍으면 그 선반의 자재가 열립니다. 쓸 자재 옆 <b>꺼내기</b>를 누르고 수량·현장만 맞추면 출고가 끝납니다.</li><li>자재 탭 검색창이나 위치별·분류별 목록으로 찾아 품목을 열고 <b>출고</b>를 눌러도 됩니다. 자주 쓰는 품목은 자재 첫 화면 「내가 자주 쓰는 품목」에 저절로 모입니다.</li><li>저장 직후 아래에 뜨는 <b>되돌리기</b>를 누르면 방금 기록이 취소됩니다.</li><li>꺼냈다가 안 쓰고 돌려놓으면 기록 옆의 <b>출고 취소 (안 씀)</b>를 누릅니다. 수량이 원래대로 돌아갑니다. 본인 기록은 7일 안에 취소할 수 있고, 그 뒤에는 관리자가 합니다.</li><li>새로 들어온 자재는 <b>입고</b>, 다른 캐비넷으로 옮길 때는 <b>이동</b>입니다.</li><li>지난 기록은 자재 첫 화면 위쪽 <b>입출고 기록</b>에서 달별로 보고, 현장 이름·품명·사람으로 찾을 수 있습니다.</li><li>여러 자재를 꺼낼 때는 품목마다 <b>담기</b>를 누르고, 아래 띠의 <b>한 번에 출고</b>에서 현장을 한 번만 적습니다.</li></ol>
     <h3>전파가 약할 때</h3><ol><li>오프라인이어도 받아 둔 목록은 그대로 보입니다. 저장(입고·출고 등)은 연결된 뒤에 됩니다.</li><li>저장 중에 연결이 끊겨 <b>「저장됐는지 확인하지 못했습니다」</b>가 뜨면, 연결된 뒤 같은 버튼을 한 번 더 누르세요. 앱이 서버에 먼저 물어보고, 이미 저장됐으면 <b>두 번 저장하지 않습니다.</b></li><li>앞서 끊겼던 저장이 됐는지는 연결이 돌아오면 앱이 알려 줍니다.</li><li>큰 파일을 올리다 끊기면 앱이 잠시 기다렸다가 <b>끊긴 곳부터 이어서</b> 올립니다. 파일은 올라갔는데 목록에 오르기 전에 끊기면, 연결이 돌아올 때 저절로 목록에 올라갑니다.</li></ol>
     <h3>폰 알림</h3><ol><li>더보기 › <b>폰 알림 받기</b>를 켜고 「허용」을 누르면, 앱을 닫아 두어도 ${adm ? '재고 부족 · 가입 신청 · 댓글' : '내 자재·자료에 달린 댓글'} 알림이 폰에 뜹니다. 알림을 누르면 그 화면이 열립니다.</li><li>아이폰은 <b>홈 화면에 추가한 앱 아이콘</b>으로 열었을 때만 켤 수 있습니다 (iOS 16.4 이상).</li><li>폰 설정에서 알림을 막았다면 폰 설정 › 알림(또는 브라우저 › 사이트 설정 › 알림)에서 허용한 뒤 다시 켜세요. 로그아웃하면 그 폰으로 오던 알림은 끊깁니다.</li></ol>
-    <h3>자료 쓰는 법</h3><ol><li>자료 탭에서 폴더를 열고 <b>올리기</b>로 PDF·엑셀·사진을 그대로 올립니다.</li><li>검색창에 에러코드나 부품명을 치면 파일 안의 글자까지 찾아 줍니다.</li><li>교육 영상은 유튜브에 「일부 공개」로 올린 뒤 <b>영상·링크</b>로 주소만 등록합니다.</li><li>자주 보는 자료는 파일 화면 오른쪽 위 <b>☆</b>를 누르면 자료 탭의 <b>「내 저장함」</b>에 모이고 폰에도 저장됩니다. 전파가 없는 기계실·피트에서도 열리고, 내 폴더를 만들어 정리할 수 있습니다(이 휴대폰에만 저장).</li><li>지난 입출고는 자재 첫 화면 위쪽 바로가기 <b>「입출고 기록」</b>에서, 현장마다 쓴 자재는 <b>「현장별 이력」</b>에서 봅니다.</li></ol>
+    <h3>자료 쓰는 법</h3><ol><li>자료 탭에서 폴더를 열고 <b>올리기</b>로 PDF·엑셀·사진을 그대로 올립니다.</li><li>검색창에 에러코드나 부품명을 치면 파일 안의 글자까지 찾아 줍니다.</li><li>교육 영상은 유튜브에 「일부 공개」로 올린 뒤 <b>영상·링크</b>로 주소만 등록합니다.</li><li>자주 보는 자료는 파일 화면 오른쪽 위 <b>☆</b>를 누르면 자료 탭의 <b>「내 저장함」</b>에 모이고 폰에도 저장됩니다. 전파가 없는 기계실·피트에서도 열리고, 내 폴더를 만들어 정리할 수 있습니다(이 휴대폰에만 저장).</li><li>지난 입출고는 자재 첫 화면 위쪽 바로가기 <b>「입출고 기록」</b>에서, 현장마다 쓴 자재는 <b>「현장별 이력」</b>에서 봅니다.</li>${adm ? '<li>폴더 안 <b>폴더 설정</b>(관리자)에서 이름 · 날짜별 자동 정리 · 파일 순서(최근 올린 순/이름 순) · 새 자료 알림을 언제든 바꿉니다. 새 자료 알림을 켠 폴더에 자료가 올라오면 모든 직원에게 알림이 갑니다.</li>' : ''}</ol>
     ${adm ? `<h3>가입 승인과 퇴사자</h3><ol><li>더보기 › 직원 관리에서 이름·사내번호를 확인하고 승인합니다.</li><li>비밀번호를 잊은 직원은 이름을 눌러 <b>비밀번호 초기화</b> → 화면에 뜬 임시 번호 6자리를 알려 줍니다. 직원이 그 번호로 로그인하면 <b>새 비밀번호를 정하는 화면</b>이 먼저 나오고, 정해야 앱으로 들어갑니다.</li><li>퇴사자는 지우지 않고 <b>사용 중지</b>합니다. 그 사람이 남긴 입출고 기록은 그대로 남습니다.</li></ol>
-    <h3>처음 입력하는 순서</h3><ol><li>더보기 › 위치 관리 › <b>한 번에 만들기</b>: 구역 › 캐비넷·선반 번호 범위 › 칸을 고르면 QR 코드까지 한꺼번에 생기고, 바로 라벨 인쇄 화면으로 갑니다.</li><li>더보기 › <b>품목 대량 등록</b>: 「빈 양식 받기」로 받은 엑셀에 채워 붙여 넣습니다. 위치 코드와 수량을 적으면 입고 기록까지 함께 남습니다.</li><li>선반마다 실제 수량을 맞출 때는 그 선반 화면의 <b>실사</b>를 누르고 세어 적습니다. 다 적으면 「다음 선반」 → QR을 찍으면 바로 다음 실사 화면입니다. 적던 수량은 저장 전까지 이 폰에 남습니다.</li></ol>
+    <h3>처음 입력하는 순서</h3><ol><li>더보기 › 위치 관리 › <b>한 번에 만들기</b>: 구역 › 캐비넷·선반 번호 범위 › 칸을 고르면 QR 코드까지 한꺼번에 생기고, 바로 라벨 인쇄 화면으로 갑니다.</li><li>더보기 › <b>품목 대량 등록</b>: 「빈 양식 받기」로 받은 엑셀에 채워 붙여 넣습니다. 위치 코드와 수량을 적으면 입고 기록까지 함께 남습니다.</li><li>하나씩 넣을 때는 자재 탭 <b>품목 추가</b>: 아래 <b>처음 재고</b>에서 위치와 수량을 고르면 입고까지 한 번에 됩니다. <b>단위</b>는 수량이 아니라 「개」「세트」「m」 같은 세는 말이고, <b>분류</b>는 자재를 종류별로 묶는 이름표(선택)입니다.</li><li>선반마다 실제 수량을 맞출 때는 그 선반 화면의 <b>실사</b>를 누르고 세어 적습니다. 다 적으면 「다음 선반」 → QR을 찍으면 바로 다음 실사 화면입니다. 적던 수량은 저장 전까지 이 폰에 남습니다.</li></ol>
     <h3>위치 추가와 QR 라벨</h3><ol><li>더보기 › 위치 관리에서 캐비넷·선반을 추가하고 짧은 코드(예: WH-S5)를 붙입니다. 코드에는 빈칸을 넣지 않습니다.</li><li>QR 라벨 만들기 → 인쇄 → 선반에 붙입니다. 앱의 <b>스캔</b> 탭으로 찍으면 그 선반 화면이 바로 열립니다. (안드로이드는 폰 기본 카메라로 찍어도 열립니다. 아이폰은 기본 카메라로 찍으면 사파리에서 열려 로그인을 따로 해야 하니 앱의 스캔 탭을 쓰세요.)</li></ol>
     <h3>빨간 불이 켜졌을 때 (시스템 상태)</h3><ol><li>직원들이 앱을 평소처럼 쓰고 있다면 급한 일은 아닙니다. 앱을 쓰는 것만으로도 서버는 깨어 있습니다.</li><li>회사용 구글 계정(gaya.elevator.app)에 로그인해 보안 경고나 계정 잠김 안내가 있는지 봅니다.</li><li>그래도 계속 빨간 불이면 개발자(재석)에게 연락합니다.</li><li>앱이 아예 열리지 않고 「서버가 쉬고 있습니다」라고 나오면: supabase.com 에 소유자 계정으로 로그인 → 가야엘리베이터 조직 › gaya-app 프로젝트 → <b>Resume project</b> 를 누르고 몇 분 기다립니다. 멈춘 뒤 1년 안이면 데이터는 그대로입니다.</li></ol>
     <h3>재고 부족 알리기와 기록 받기</h3><ol><li>자재 첫 화면 「재고 부족」의 <b>목록 보내기</b>를 누르면 부족한 품목 목록을 카톡 등으로 바로 보낼 수 있습니다.</li><li>입출고 기록 화면 오른쪽 위 <b>엑셀</b>을 누르면 그 달 기록(검색·종류로 거른 그대로)이 엑셀 파일로 받아집니다.</li><li>자재 첫 화면 바로가기 <b>「발주·입고」</b>: 부족한 만큼 미리 채운 발주 목록을 거래처에 보내고, 자재가 들어오면 「한 번에 입고」로 체크한 품목을 위치별로 한꺼번에 넣습니다.</li></ol>
@@ -2317,9 +2413,9 @@ function posterHtml(url, admins) {
     </ol>
     <div class="ps-foot">비밀번호를 잊었거나 궁금한 점은 ${admins.length ? '관리자(' + esc(admins.join(', ')) + ')' : '관리자'}에게 · 앱 안 더보기 › 사용 안내</div>`;
 }
+const posterArgs = () => [CONFIG.APP_URL || (DEMO ? 'https://gaya-elevator.github.io/' : location.origin + location.pathname), S.cache.people.filter(p => p.role === 'admin' && p.status === 'active').map(p => p.name)];
 VIEW['more.poster'] = () => {
-  const url = CONFIG.APP_URL || (DEMO ? 'https://gaya-elevator.github.io/' : location.origin + location.pathname);
-  const admins = S.cache.people.filter(p => p.role === 'admin' && p.status === 'active').map(p => p.name);
+  const [url, admins] = posterArgs();
   const body = `<div class="toolbar"><button class="btn primary" data-act="printPoster">${ic('docs')}인쇄</button><button class="btn" data-act="shareApp">${ic('share')}앱 주소 보내기</button></div>
     <p class="muted" style="font-size:13px;margin:0">A4 한 장 · 인쇄 창에서 「PDF로 저장」도 됩니다. 사무실·창고에 붙여 두세요. 휴대폰으로 보는 사람은 화면의 QR을 찍을 수 없으니 「앱 주소 보내기」로 카톡에 링크를 보내 주세요. 안내문 PDF 안의 「여기를 누르세요」도 눌러서 열립니다.</p>
     <div class="posterwrap"><div id="poster" class="poster">${posterHtml(url, admins)}</div></div>`;
@@ -2409,15 +2505,26 @@ function sheetView() {
         ${sheetErr()}${okBtn('정정 저장')}`;
       break;
     case 'item': {
-      const cats = flatTree(S.ix.catKids);
-      h = sheetHead(d.id ? '품목 수정' : '품목 추가') + `<div class="field"><label for="sh-name">품명</label><input id="sh-name" maxlength="200" data-bind="name" value="${esc(d.name || '')}" placeholder="예: 도어 롤러" data-autofocus></div>
+      const cats = flatTree(S.ix.catKids); const isNew = !d.id;
+      if (d.category_id === '__new') { d.cat_new = true; d.category_id = ''; } // 「＋ 새 분류 만들기」를 고른 경우
+      const UNITS = ['개', '세트', 'm', '롤', '통', '봉', '박스', '장'];
+      h = sheetHead(isNew ? '품목 추가' : '품목 수정') + `<div class="field"><label for="sh-name">품명</label><input id="sh-name" maxlength="200" data-bind="name" value="${esc(d.name || '')}" placeholder="예: 도어 롤러" data-autofocus></div>
         <div class="row2"><div class="field"><label for="sh-spec">규격·사양</label><input id="sh-spec" maxlength="200" data-bind="spec" value="${esc(d.spec || '')}" placeholder="예: Ø62 행거용"></div><div class="field"><label for="sh-maker">제조사</label><input id="sh-maker" maxlength="100" data-bind="maker" value="${esc(d.maker || '')}"></div></div>
         <div class="field"><label for="sh-models">적용 기종</label><input id="sh-models" maxlength="500" data-bind="models" value="${esc(d.models || '')}" placeholder="예: GEN2, STVF"></div>
-        <div class="field"><label for="sh-cat">분류</label><select id="sh-cat" data-bind="category_id"><option value="">분류 없음</option>${cats.map(({ n, depth }) => `<option value="${n.id}" ${d.category_id === n.id ? 'selected' : ''}>${'  '.repeat(depth)}${depth ? '└ ' : ''}${esc(n.name)}</option>`).join('')}</select></div>
-        <div class="row2"><div class="field"><label for="sh-unit">단위</label><input id="sh-unit" maxlength="20" data-bind="unit" value="${esc(d.unit || '개')}" list="units"><datalist id="units"><option value="개"><option value="세트"><option value="봉"><option value="통"><option value="m"><option value="롤"></datalist></div>
-        <div class="field"><label for="sh-min">최소 재고</label><input id="sh-min" data-bind="min_qty" inputmode="numeric" pattern="[0-9]*" value="${esc(d.min_qty ?? '')}" placeholder="0"><span class="hint">이보다 적으면 「부족」 표시</span></div></div>
-        <div class="field"><label for="sh-memo">메모</label><textarea id="sh-memo" maxlength="3000" data-bind="memo">${esc(d.memo || '')}</textarea></div>
-        ${sheetErr()}${okBtn(d.id ? '저장' : '품목 추가')}
+        <div class="field"><label for="${d.cat_new ? 'sh-newcat' : 'sh-cat'}">분류 <span class="opt">(선택)</span></label>
+          ${d.cat_new ? `<div class="toolbar"><input id="sh-newcat" class="grow" maxlength="100" data-bind="new_category" value="${esc(d.new_category || '')}" placeholder="새 분류 이름 (예: 도어 부품)" autocomplete="off"><button type="button" class="btn sm" data-act="catPickBack">목록에서 고르기</button></div>`
+            : `<select id="sh-cat" data-bind="category_id"><option value="">분류 없음</option>${cats.map(({ n, depth }) => `<option value="${n.id}" ${d.category_id === n.id ? 'selected' : ''}>${'  '.repeat(depth)}${depth ? '└ ' : ''}${esc(n.name)}</option>`).join('')}${isNew ? '<option value="__new">＋ 새 분류 만들기…</option>' : ''}</select>`}
+          <span class="hint">분류는 자재를 종류별로 묶는 이름표입니다 (예: 도어 부품 · 로프·도르래 · 안전 장치). 자재 첫 화면 「분류별」 보기에서 이 묶음으로 모아 봅니다. 정하지 않아도 됩니다.</span></div>
+        <div class="field"><label for="sh-unit">단위 <span class="opt">(세는 말)</span></label><input id="sh-unit" maxlength="20" data-bind="unit" value="${esc(d.unit ?? '개')}" autocomplete="off">
+          <div class="chips">${UNITS.map(u => `<button type="button" class="chipbtn" data-act="pick" data-k="unit" data-v="${u}" aria-pressed="${d.unit === u}">${u}</button>`).join('')}</div>
+          <span class="hint">수량이 아니라 「개」「세트」「m」처럼 세는 말입니다. 수량은 ${isNew && !d.countLoc ? '아래 「처음 재고」나 ' : ''}「입고」로 넣습니다.</span></div>
+        <div class="field"><label for="sh-min">최소 재고 <span class="opt">(선택)</span></label><input id="sh-min" data-bind="min_qty" inputmode="numeric" pattern="[0-9]*" value="${esc(d.min_qty ?? '')}" placeholder="0" style="max-width:160px"><span class="hint">전체 수량이 이보다 적으면 「부족」으로 표시하고 관리자에게 알립니다. 모르면 비워 두세요.</span></div>
+        ${isNew && !d.countLoc ? `<div class="subsec"><div class="subsec-h">${ic('in')}처음 재고 <span class="opt">(선택)</span></div>
+          <p class="hint" style="margin:0">지금 있는 수량을 같이 넣으면 따로 입고하지 않아도 됩니다. 비워 두면 품목만 만듭니다.</p>
+          <div class="field"><span class="lab">넣을 위치</span>${locPicker('init_loc', d.init_loc)}</div>
+          <div class="field"><span class="lab">수량 (${esc(String(d.unit || '개').trim() || '개')})</span>${stepper('init_qty', d.init_qty ?? '')}</div></div>` : ''}
+        <div class="field"><label for="sh-memo">메모 <span class="opt">(선택)</span></label><textarea id="sh-memo" maxlength="3000" data-bind="memo">${esc(d.memo || '')}</textarea></div>
+        ${sheetErr()}${okBtn(isNew ? '품목 추가' : '저장')}
         ${d.id ? `<button class="btn danger block" data-act="itemDelete" data-id="${d.id}" data-write>${ic('trash')}품목 삭제</button>` : ''}`;
       break;
     }
@@ -2436,7 +2543,7 @@ function sheetView() {
       break;
     case 'mkdir':
       h = sheetHead('폴더 만들기', esc(d.parent_id ? folderPathText(d.parent_id) : '자료') + ' 안에') + `<div class="field"><label for="sh-fname">폴더 이름</label><input id="sh-fname" maxlength="200" data-bind="name" value="${esc(d.name || '')}" placeholder="예: 현대 STVF" data-autofocus></div>
-        <label class="notice check"><input type="checkbox" data-bind="auto_sort" ${d.auto_sort ? 'checked' : ''}><span><b>날짜별 자동 정리</b> · 업무일지처럼 매달 쌓이는 자료라면 켜세요. 올릴 때 연도 › 월 폴더가 저절로 생깁니다.</span></label>
+        <label class="notice check"><input type="checkbox" data-bind="auto_sort" ${d.auto_sort ? 'checked' : ''}><span><b>날짜별 자동 정리</b> · 업무일지처럼 매달 쌓이는 자료라면 켜세요. 올릴 때 연도 › 월 폴더가 저절로 생깁니다.${can(S.user, 'folderAdmin') ? ' 나중에 폴더 안 「폴더 설정」에서 켜고 끌 수 있습니다.' : ''}</span></label>
         ${sheetErr()}${okBtn('만들기')}`;
       break;
     case 'rename':
@@ -2450,9 +2557,16 @@ function sheetView() {
         <div class="field"><label for="sh-url">주소</label><input id="sh-url" maxlength="2000" data-bind="url" value="${esc(d.url || '')}" inputmode="url" autocapitalize="off" autocomplete="off" placeholder="https://youtu.be/..."><span class="hint">교육 영상은 유튜브에 「일부 공개」로 올린 뒤 주소를 붙여 넣으세요. 드라이브 용량을 쓰지 않습니다.</span></div>
         ${sheetErr()}${okBtn('등록')}`;
       break;
-    case 'folderMenu': {
+    case 'folderSet': {
       const f = S.ix.folder.get(d.id); if (!f) { S.sheet = null; return ''; }
-      h = sheetHead(f.name, '폴더 관리 (관리자)') + `<div class="ledger"><button class="lrow" data-act="folderRename" data-id="${f.id}" data-write><span class="ic">${ic('edit')}</span><div class="main"><span class="t">이름 변경</span></div></button><button class="lrow" data-act="folderMove" data-id="${f.id}" data-write><span class="ic">${ic('move')}</span><div class="main"><span class="t">다른 폴더로 옮기기</span></div></button><button class="lrow" data-act="folderDelete" data-id="${f.id}" data-write><span class="ic" style="color:var(--crit);background:var(--crit-soft)">${ic('trash')}</span><div class="main"><span class="t" style="color:var(--crit)">폴더 삭제</span><span class="s">안의 폴더·파일도 함께 휴지통으로 갑니다</span></div></button></div>`;
+      const n = descFolders(f.id); const sw = (k, icon, t, sub) => `<label class="lrow" style="cursor:pointer"><span class="ic">${ic(icon)}</span><div class="main"><span class="t">${t}</span><span class="s">${sub}</span></div><input type="checkbox" class="switch" data-bind="${k}" ${d[k] ? 'checked' : ''} aria-label="${t}"></label>`;
+      h = sheetHead('폴더 설정', esc(folderPathText(f.id))) + `<div class="field"><label for="sh-fsn">폴더 이름</label><input id="sh-fsn" maxlength="200" data-bind="name" value="${esc(d.name || '')}"></div>
+        <div class="ledger">${sw('auto_sort', 'calendar', '날짜별 자동 정리', '켜면 이 폴더에 올리는 파일이 올린 날에 맞춰 <b>연도 › 월</b> 폴더(예: 2026 › 10월)로 저절로 들어갑니다. 업무일지처럼 매달 쌓이는 자료에 쓰세요. 이미 올린 파일은 그대로 둡니다.')}
+          ${sw('notify_new', 'bell', '새 자료 알림', '이 폴더(안쪽 폴더 포함)에 자료가 올라오면 올린 사람을 뺀 모든 직원에게 알림이 갑니다. 폰 알림을 켠 사람은 폰에도 뜹니다. 공문·작업 지침 폴더에 쓰세요.')}</div>
+        <div class="field"><span class="lab">파일 순서</span><div class="seg block" role="group" aria-label="파일 순서"><button type="button" data-act="pick" data-k="sort_mode" data-v="new" aria-pressed="${d.sort_mode !== 'name'}">${ic('clock')}최근 올린 순</button><button type="button" data-act="pick" data-k="sort_mode" data-v="name" aria-pressed="${d.sort_mode === 'name'}">${ic('sort')}이름 순</button></div><span class="hint">도면·매뉴얼처럼 번호를 붙인 자료는 「이름 순」이 찾기 쉽습니다. (1, 2, 10 순서로 맞게 정렬)</span></div>
+        <p class="muted" style="font-size:12.5px;margin:0">안에 폴더 ${n.f}개 · 파일 ${n.d}개${f.created_by ? ' · 만든 사람 ' + esc(personName(f.created_by)) : ''}${f.created_at ? ' · ' + fmtWhen(f.created_at) : ''}</p>
+        ${sheetErr()}${okBtn('설정 저장')}
+        <div class="ledger"><button class="lrow" data-act="folderMove" data-id="${f.id}" data-write><span class="ic">${ic('move')}</span><div class="main"><span class="t">다른 폴더로 옮기기</span><span class="s">구글 드라이브의 폴더도 같이 옮겨집니다</span></div><span class="chev">${ic('chev')}</span></button><button class="lrow" data-act="folderDelete" data-id="${f.id}" data-write><span class="ic" style="color:var(--crit);background:var(--crit-soft)">${ic('trash')}</span><div class="main"><span class="t" style="color:var(--crit)">폴더 삭제</span><span class="s">안의 폴더·파일도 함께 휴지통으로 갑니다 (30일 안에 되살리기)</span></div></button></div>`;
       break;
     }
     case 'confirm':
@@ -2561,10 +2675,22 @@ ACT.sheetOk = () => {
     adjust: () => { if (!d.location_id) return bad('위치를 고르세요.'); if (!needQty(0)) return; if (!(d.reason || '').trim()) return bad('정정 사유를 적어 주세요. 활동 기록에 남습니다.'); return run(() => A.stockAdjust(d), '수량을 정정했습니다', { op: d.op_id, label: `수량 정정 · ${itName()}` }); },
     item: () => {
       if (!(d.name || '').trim()) return bad('품명을 입력하세요.');
+      if (/^\s*\d/.test(d.unit || '')) return bad(`단위 칸에는 수량이 아니라 「개」「세트」「m」처럼 세는 말을 적습니다.${!d.id && !d.countLoc ? ' 수량은 아래 「처음 재고」에 적으세요.' : ''}`);
       if (String(d.min_qty ?? '').trim() !== '' && !isInt(d.min_qty)) return bad('최소 재고는 0 이상의 정수로 입력하세요. (모르면 비워 두세요)');
+      const iq = String(d.init_qty ?? '').trim();
+      if (!d.id && iq !== '' && !isInt(iq)) return bad('처음 재고 수량은 0 이상의 정수로 입력하세요. (없으면 비워 두세요)');
+      if (!d.id && iq !== '' && +iq > 0 && !d.init_loc) return bad('처음 재고를 넣을 위치를 고르세요.');
       let p = d;
+      if (!d.id) {
+        p = { op_id: d.op_id, countLoc: d.countLoc };
+        ['name', 'spec', 'maker', 'models', 'category_id', 'unit', 'min_qty', 'memo'].forEach(k => { if (d[k] != null) p[k] = d[k]; });
+        if (d.cat_new) { p.category_id = ''; if ((d.new_category || '').trim()) p.new_category = d.new_category.trim(); }
+        if (iq !== '' && +iq > 0) { p.init_loc = d.init_loc; p.init_qty = String(+iq); }
+      }
+      const unitT = String(d.unit || '').trim() || '개';
+      const addMsg = '품목을 추가했습니다' + (p.init_qty ? ` · ${p.init_qty}${unitT} 입고` : '');
       if (d.id && s.orig) { p = { id: d.id }; ['name', 'spec', 'maker', 'models', 'category_id', 'unit', 'min_qty', 'memo'].forEach(k => { if (String(d[k] ?? '') !== String(s.orig[k] ?? '')) p[k] = d[k]; }); } // 바꾼 칸만 보낸다
-      return run(() => A.saveItem(p), d.id ? '저장했습니다' : '품목을 추가했습니다', d.id ? {} : { op: d.op_id, label: `품목 추가 · ${(d.name || '').trim()}` }).then(id => { if (!id || d.id || id === true) return; if (d.countLoc) { countAdd(d.countLoc, id); render(); return; } nav({ tab: 'items', view: 'item', id }); });
+      return run(() => A.saveItem(p), d.id ? '저장했습니다' : addMsg, d.id ? {} : { op: d.op_id, label: `품목 추가 · ${(d.name || '').trim()}` }).then(id => { if (!id || d.id || id === true) return; if (d.countLoc) { countAdd(d.countLoc, id); render(); return; } nav({ tab: 'items', view: 'item', id }); });
     },
     memo: () => run(() => A.saveItem({ id: d.id, memo: d.memo }), '메모를 저장했습니다'),
     cart: () => {
@@ -2611,6 +2737,13 @@ ACT.sheetOk = () => {
     loc: () => { if (!(d.name || '').trim()) return bad('위치 이름을 입력하세요.'); d.code = String(d.code || '').trim().toUpperCase(); if (/\s/.test(d.code)) return bad('라벨 코드에는 빈칸을 넣지 마세요. (예: WH-S5)'); return run(() => A.saveLocation(d), d.id ? '저장했습니다' : '위치를 추가했습니다', d.id ? {} : { op: d.op_id, label: `위치 추가 · ${d.name.trim()}` }); },
     cat: () => { if (!(d.name || '').trim()) return bad('분류 이름을 입력하세요.'); return run(() => A.saveCategory(d), '저장했습니다', d.id ? {} : { op: d.op_id, label: `분류 추가 · ${d.name.trim()}` }); },
     mkdir: () => { const n = (d.name || '').trim(); if (!n) return bad('폴더 이름을 입력하세요.'); if (/[\/\\]/.test(n)) return bad('폴더 이름에 / 나 \\ 는 쓸 수 없습니다.'); return run(() => A.mkdir(d), '폴더를 만들었습니다'); },
+    folderSet: () => {
+      const f = S.ix.folder.get(d.id); if (!f) { S.sheet = null; return render(); }
+      const n = (d.name || '').trim(); if (!n) return bad('폴더 이름을 입력하세요.'); if (/[\/\\]/.test(n)) return bad('폴더 이름에 / 나 \\ 는 쓸 수 없습니다.');
+      const renamed = n !== f.name, changed = !!d.auto_sort !== !!f.auto_sort || (d.sort_mode || 'new') !== (f.sort_mode || 'new') || !!d.notify_new !== !!f.notify_new;
+      if (!renamed && !changed) { S.sheet = null; render(); return toast('바뀐 것이 없습니다'); }
+      return run(async () => { if (renamed) await A.renameFolder(f.id, n); if (changed) await A.folderSettings(f.id, { auto_sort: !!d.auto_sort, sort_mode: d.sort_mode || 'new', notify_new: !!d.notify_new }); }, '폴더 설정을 저장했습니다');
+    },
     rename: () => { const n = (d.name || '').trim(); if (!n) return bad('이름을 입력하세요.'); if (d.kind === 'folder' && /[\/\\]/.test(n)) return bad('폴더 이름에 / 나 \\ 는 쓸 수 없습니다.'); return run(() => d.kind === 'folder' ? A.renameFolder(d.id, n) : A.renameDoc(d.id, n), '이름을 바꿨습니다'); },
     moveTo: () => { if (d.kind !== 'folder' && !d.target) return bad('옮길 폴더를 고르세요.'); return run(() => d.kind === 'folder' ? A.moveFolder(d.id, d.target || null) : A.moveDoc(d.id, d.target), '옮겼습니다'); },
     link: () => { if (!(d.name || '').trim()) return bad('제목을 입력하세요.'); if (!/^https?:\/\//i.test((d.url || '').trim())) return bad('주소는 https:// 로 시작해야 합니다.'); d.url = d.url.trim(); return run(() => A.addLink(d.folder_id, d), '등록했습니다', { op: d.op_id, label: `링크 등록 · ${d.name.trim()}` }); },
@@ -2686,11 +2819,12 @@ Object.assign(ACT, {
     if (s.type === 'move' && d.k === 'from' && s.d.to === d.v) s.d.to = null;
     render();
   },
-  step: d => { const s = S.sheet; const min = s.type === 'adjust' ? 0 : 1; s.d[d.k] = Math.max(min, (parseInt(s.d[d.k], 10) || 0) + +d.d); render(); },
+  step: d => { const s = S.sheet; const min = s.type === 'adjust' || s.type === 'item' ? 0 : 1; s.d[d.k] = Math.max(min, (parseInt(s.d[d.k], 10) || 0) + +d.d); render(); },
   cancelTx: d => { const t = (vd().tx || []).find(x => x.id === d.id); if (!t) return; const it = S.ix.item.get(t.item_id); const unit = it ? it.unit : '';
     ask(t.type === 'out' ? '출고를 취소할까요?' : TX_NAME[t.type] + '을 취소할까요?', `${personName(t.user_id)} · ${fmtWhen(t.created_at)} · ${itemTitle(it)} ${t.qty}${unit}. ${t.type === 'out' ? (locPathText(t.from_loc) || '원래 위치') + '에 수량이 다시 더해집니다.' : '수량이 기록 전 상태로 돌아갑니다.'}`, 'cancelTx', { id: d.id, ok: '취소하기' }); },
 
-  itemNew: () => openSheet('item', { unit: '개', category_id: (route().mode || S.itemsMode) === 'cat' ? route().node || '' : '' }),
+  itemNew: () => { const cat = (route().mode || S.itemsMode) === 'cat'; const n = route().node; openSheet('item', { unit: '개', category_id: cat ? n || '' : '', init_loc: !cat && n && S.ix.loc.has(n) ? n : null }); },
+  catPickBack: () => { const s = S.sheet; if (!s) return; s.d.cat_new = false; s.d.new_category = ''; s.d.category_id = ''; render(); },
   itemEdit: d => { const it = S.ix.item.get(d.id); if (!it) return; openSheet('item', { ...clone(it) }); S.sheet.orig = clone(it); },
   itemDelete: d => ask('품목을 지울까요?', itemTitle(S.ix.item.get(d.id)) + ' · 휴지통에서 30일 안에 되살릴 수 있습니다. 재고가 남아 있으면 지워지지 않습니다.', 'itemDelete', { id: d.id, ok: '지우기', danger: true }),
   memoEdit: d => openSheet('memo', { id: d.id, memo: (S.ix.item.get(d.id) || {}).memo || '' }),
@@ -2709,7 +2843,8 @@ Object.assign(ACT, {
   mkdir: () => openSheet('mkdir', { parent_id: route().folder || null }),
   addLink: () => openSheet('link', { folder_id: route().folder }),
   upload: () => $('#filepick').click(),
-  folderMenu: d => openSheet('folderMenu', { id: d.id }),
+  folderSet: d => { const f = S.ix.folder.get(d.id); if (f) openSheet('folderSet', { id: f.id, name: f.name, auto_sort: !!f.auto_sort, sort_mode: f.sort_mode || 'new', notify_new: !!f.notify_new }); },
+  folderMenu: d => ACT.folderSet(d),
   folderRename: d => openSheet('rename', { kind: 'folder', id: d.id, name: S.ix.folder.get(d.id).name }),
   folderMove: d => openSheet('moveTo', { kind: 'folder', id: d.id, target: S.ix.folder.get(d.id).parent_id }),
   folderDelete: d => { const n = descFolders(d.id); ask('폴더를 지울까요?', `${folderPathText(d.id)} · 안의 폴더 ${n.f}개와 파일 ${n.d}개도 함께 휴지통으로 갑니다. 30일 안에 되살릴 수 있습니다.`, 'folderDelete', { id: d.id, ok: '지우기', danger: true }); },
@@ -2721,6 +2856,7 @@ Object.assign(ACT, {
   notif: d => { let l = {}; try { l = JSON.parse(d.link || '{}'); } catch {} if (!l.tab) return;
     if (l.view === 'item' && l.id) ACT.item({ id: l.id });
     else if (l.view === 'doc' && l.id) ACT.doc({ id: l.id });
+    else if (l.view === 'folder' && l.id && S.ix.folder.has(l.id)) { S.lastTab[S.tab] = S.stack; S.stack = [{ ...ROOTS.docs }]; S.docsQ = ''; S.docSearchRes = null; nav({ tab: 'docs', view: 'browse', folder: l.id }); }
     else if (l.view === 'users') { S.lastTab[S.tab] = S.stack; S.stack = [{ ...ROOTS.more }]; nav({ tab: 'more', view: 'users' }); }
     else goTab(l.tab); },
   readAll: () => run(() => S.api.markAllRead(), null, { reload: false }).then(ok => { if (ok) { S.unread = 0; render(); } }),
@@ -2745,17 +2881,27 @@ Object.assign(ACT, {
       const [name, spec, maker, models, cat, unit, min, code, qty, memo] = c.map(x => (x || '').trim());
       const r = { name, spec, maker, models, unit: unit || '개', min_qty: isInt(min) ? +min : 0, qty: isInt(qty) ? +qty : 0, memo, catName: cat, locCode: code, rawQty: qty };
       if (cat) r.category_id = byCat.get(cat); if (code) r.location_id = byCode.get(code.toUpperCase());
-      r.warn = !name ? '품명 없음' : cat && !r.category_id ? '모르는 분류' : code && !r.location_id ? '모르는 위치 코드' : qty && !isInt(qty) ? '수량이 정수가 아님' : min && !isInt(min) ? '최소 재고가 정수가 아님' : '';
+      r.warn = !name ? '품명 없음' : /^\d/.test(r.unit) ? '단위에 숫자 — 「개」처럼 세는 말을 적고 수량은 「수량」 칸에' : cat && !r.category_id ? '모르는 분류' : code && !r.location_id ? '모르는 위치 코드' : qty && !isInt(qty) ? '수량이 정수가 아님' : min && !isInt(min) ? '최소 재고가 정수가 아님' : '';
       return r;
     });
     if (!S.bulk.rows.length) toast('붙여 넣은 내용이 없습니다.', true); render();
   },
-  bulkGo: () => { const rows = S.bulk.rows.filter(r => r.name).map(r => { const x = { ...r }; delete x.warn; delete x.catName; delete x.locCode; delete x.rawQty; return x; }); ask(rows.length + '개 품목을 등록할까요?', '위치 코드와 수량이 있는 줄은 그 위치에 입고 기록까지 함께 남깁니다.', 'bulkGo', { rows, ok: '등록' }); },
+  bulkGo: () => { if (S.bulk.rows.some(r => /^\d/.test(r.unit))) return toast('단위 칸에 숫자가 들어간 줄이 있습니다. 단위는 「개」「세트」처럼 적고, 수량은 「수량」 칸에 적은 뒤 다시 미리 보기를 누르세요.', true); const rows = S.bulk.rows.filter(r => r.name).map(r => { const x = { ...r }; delete x.warn; delete x.catName; delete x.locCode; delete x.rawQty; return x; }); ask(rows.length + '개 품목을 등록할까요?', '위치 코드와 수량이 있는 줄은 그 위치에 입고 기록까지 함께 남깁니다.', 'bulkGo', { rows, ok: '등록' }); },
 
   fakeOff: (d, el) => { S.fakeOffline = el.checked; setTimeout(render, 0); },
   switchRole: () => openSheet('switchRole'),
   demoReset: () => ask('체험판을 처음 상태로 돌릴까요?', '이 기기에서 해 본 입출고·업로드가 모두 지워지고 예시 데이터가 다시 채워집니다.', 'demoReset', { ok: '처음으로', danger: true })
 });
+/* 안내문 인쇄: 안내문만 따로 꺼내 A4 한 장에 가운데 맞춰 찍는다.
+   (아이폰은 인쇄 창이 뜬 뒤에 인쇄할 화면을 만들므로, 인쇄 창이 닫힐 때까지 인쇄용 상태를 유지한다) */
+function printPosterNow() {
+  let box = $('#printbox'); if (!box) { box = document.createElement('div'); box.id = 'printbox'; document.body.appendChild(box); }
+  box.innerHTML = `<div class="posterwrap"><div class="poster">${posterHtml(...posterArgs())}</div></div>`;
+  document.body.classList.add('print-poster');
+  let t; const done = () => { clearTimeout(t); window.removeEventListener('afterprint', done); document.body.classList.remove('print-poster'); box.innerHTML = ''; };
+  window.addEventListener('afterprint', done); t = setTimeout(done, 120000);
+  window.print();
+}
 const descFolders = id => { const out = [id]; for (let i = 0; i < out.length; i++) (S.ix.folderKids.get(out[i]) || []).forEach(k => out.push(k.id)); return { f: out.length - 1, d: out.reduce((a, f) => a + (S.ix.docsIn.get(f) || []).length, 0) }; };
 
 /* 폼 제출 */
@@ -2857,6 +3003,8 @@ Object.assign(ACT, {
     if (!on) { s.add(d.id); store.set(favKey(), [...s]); // 빼기는 확인한 뒤에 (폰 저장본이 있으면)
       if (offInfo(d.id)) return ask('내 저장함에서 뺄까요?', (doc ? doc.name + ' · ' : '') + '폰에 저장한 파일도 지워져, 전파가 없는 곳에서는 열 수 없게 됩니다.', 'unfav', { id: d.id, ok: '빼기', danger: true });
       return favOff(d.id); }
+    // 드라이브 미리보기를 보고 있었으면 폰에 저장한 뒤에도 그 화면을 그대로 둔다 (보기를 바꾸느라 폰이 멈칫하지 않게)
+    if (document.querySelector(`iframe[data-keep="drive-${d.id}"]`)) S.driveView = { ...(S.driveView || {}), [d.id]: true };
     render();
     if (offOK(doc)) { toast('내 저장함에 넣었습니다 · 폰에도 저장합니다'); return saveOffline(d.id); }
     toast('내 저장함에 넣었습니다 · 자료 탭 「내 저장함」에 모입니다');
@@ -2975,7 +3123,9 @@ function favOff(id) {
   offDel(id); render(); toast(had ? '내 저장함에서 뺐습니다 · 폰에 저장한 파일도 지웠습니다' : '내 저장함에서 뺐습니다');
 }
 async function offGet(id) { try { const c = await caches.open(OFF_CACHE); const r = await c.match(OFF_URL(id)); if (r) return await r.blob(); } catch {} return OFF_MEM.get(id) || null; }
-async function offDel(id) { const l = offList(); delete l[id]; store.set(OFF_KEY, l); OFF_MEM.delete(id); if (S.viewer && S.viewer.id === id) closeViewer(); try { const c = await caches.open(OFF_CACHE); await c.delete(OFF_URL(id)); } catch {} }
+async function offDel(id) { const l = offList(); delete l[id]; store.set(OFF_KEY, l); OFF_MEM.delete(id);
+  if (S.viewer && S.viewer.id === id) { const r = route(); if (r.view === 'doc' && r.id === id) S.viewer.orphan = true; else closeViewer(); } // 지금 보는 중이면 화면을 나갈 때까지 그대로
+  try { const c = await caches.open(OFF_CACHE); await c.delete(OFF_URL(id)); } catch {} }
 function offPrune() { if (!S.ix || !online()) return; Object.keys(offList()).forEach(id => { if (!S.ix.doc.has(id)) offDel(id); }); }
 async function saveOffline(id) {
   const d = S.ix.doc.get(id); if (!offOK(d)) return;
@@ -3034,7 +3184,7 @@ function loadPdfLib() {
 /* 저장본 보기: 화면을 다시 그려도 PDF 를 다시 그리지 않도록 보기 칸을 따로 들고 있다가 끼워 넣는다 */
 function closeViewer() { const v = S.viewer; S.viewer = null; if (!v) return; try { v.io && v.io.disconnect(); v.io2 && v.io2.disconnect(); v.el && v.el.querySelectorAll('canvas').forEach(c => { c.width = c.height = 0; }); v.pdf && v.pdf.destroy(); v.url && URL.revokeObjectURL(v.url); } catch {} }
 function afterRender() {
-  const slot = $('#offview'); if (!slot) return;
+  const slot = $('#offview'); if (!slot) { if (S.viewer && S.viewer.orphan) closeViewer(); return; }
   const id = slot.dataset.id;
   if (S.viewer && S.viewer.id === id) { if (S.viewer.el.parentNode !== slot) slot.replaceChildren(S.viewer.el); return; }
   closeViewer();
@@ -3051,8 +3201,11 @@ function afterRender() {
       const first = await pdf.getPage(1); const vp1 = first.getViewport({ scale: 1 });
       el.innerHTML = Array.from({ length: pdf.numPages }, (_, i) => `<div class="pg" data-p="${i + 1}" style="aspect-ratio:${vp1.width}/${vp1.height}"><span>${i + 1}</span></div>`).join('') + `<div class="pgnote">${pdf.numPages}쪽 · 두 손가락으로 벌리면 크게 보입니다</div>`;
       // 화면 근처 쪽만 그리고, 멀리 지나간 쪽은 그림을 지워 폰 메모리를 아낀다 (100쪽짜리 PDF 도 멈추지 않게)
-      const draw = async box => {
-        if (box.dataset.done) return; box.dataset.done = '1';
+      // 한 번에 한 쪽씩 차례로 그린다 (여러 쪽을 한꺼번에 그리면 폰이 그동안 터치를 받지 못한다)
+      let chain = Promise.resolve();
+      const draw = box => { chain = chain.then(() => drawNow(box)).catch(() => {}).then(() => new Promise(r => setTimeout(r, 30))); return chain; };
+      const drawNow = async box => {
+        if (box.dataset.done || S.viewer !== v) return; box.dataset.done = '1';
         const pg = await pdf.getPage(+box.dataset.p); const vp = pg.getViewport({ scale: 1 });
         const w = Math.min(1800, Math.round((box.clientWidth || 360) * Math.min(2, (window.devicePixelRatio || 1) * 1.25)));
         const sv = pg.getViewport({ scale: w / vp.width }); const c = document.createElement('canvas'); c.width = Math.round(sv.width); c.height = Math.round(sv.height);
@@ -3191,7 +3344,7 @@ Object.assign(ACT, {
   poster: () => nav({ tab: 'more', view: 'poster' }),
   shareApp: () => { const url = CONFIG.APP_URL || (DEMO ? 'https://gaya-elevator.github.io/' : location.origin + location.pathname);
     shareOut('앱 주소 보내기', `[가야엘리베이터] GAYA Hub (자재·자료 앱)\n아래 주소를 누르면 열립니다.\n${url}\n① 「가입 신청」에서 사내번호·이름·비밀번호를 적고, 관리자가 승인하면 바로 씁니다.\n② 홈 화면에 추가해 두면 앱처럼 아이콘으로 열립니다.`); },
-  printPoster: () => { if (DEMO) return note('체험판 화면에서는 인쇄 창이 열리지 않습니다. 실제 앱에서는 바로 인쇄되고, 인쇄 창에서 「PDF로 저장」도 됩니다.'); document.body.classList.add('print-poster'); window.print(); setTimeout(() => document.body.classList.remove('print-poster'), 500); }
+  printPoster: () => { if (DEMO) return note('체험판 화면에서는 인쇄 창이 열리지 않습니다. 실제 앱에서는 바로 인쇄되고, 인쇄 창에서 「PDF로 저장」도 됩니다.'); printPosterNow(); }
 });
 Object.assign(CONFIRM, {
   offClear: async () => { S.sheet = null; for (const id of Object.keys(offList())) await offDel(id); render(); note('폰에 저장한 자료를 지웠습니다'); },

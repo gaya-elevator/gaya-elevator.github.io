@@ -106,6 +106,7 @@ main{flex:1;padding:16px 16px calc(var(--tabh) + 30px + env(safe-area-inset-bott
 .seg button svg{width:17px;height:17px;vertical-align:-3px;margin-right:5px}
 .themepick{padding:0 16px 14px}
 .toolbar{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.toolbar.fill{gap:6px}.toolbar.fill .btn{flex:1 1 auto;padding:0 10px;justify-content:center;white-space:nowrap}
 .toolbar .grow{flex:1}
 .btn{display:inline-flex;align-items:center;justify-content:center;gap:7px;min-height:44px;padding:0 16px;border-radius:var(--r-sm);border:1px solid var(--line);background:var(--surface);font-weight:600;font-size:15px;white-space:nowrap;text-decoration:none;color:var(--ink)}
 .btn svg{width:19px;height:19px;flex:none}
@@ -219,6 +220,7 @@ button.lrow:active{background:var(--sunk)}
 .sheet .sub{font-size:13.5px;color:var(--muted);margin-top:-10px;overflow-wrap:anywhere}
 @keyframes fade{from{opacity:0}} @keyframes rise{from{transform:translateY(40px);opacity:.3}}
 @media (prefers-reduced-motion:reduce){.scrim,.sheet,.toast{animation:none}}
+.sheet>*{flex-shrink:0}
 .field{display:flex;flex-direction:column;gap:6px}
 .field label,.field .lab{font-size:13px;font-weight:700;color:var(--muted)}
 .field input,.field select,.field textarea{height:50px;border:1px solid var(--line);border-radius:var(--r-sm);background:var(--bg);padding:0 14px;font-size:16px;width:100%;min-width:0;outline:0}
@@ -227,6 +229,16 @@ button.lrow:active{background:var(--sunk)}
 .field .hint{font-size:12.5px;color:var(--muted)}
 .field .err{font-size:12.5px;color:var(--crit);font-weight:700}
 .row2{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.field .opt{font-weight:500;opacity:.8}
+.chips{display:flex;flex-wrap:wrap;gap:6px}
+.chipbtn{border:1px solid var(--line);background:var(--surface);color:var(--ink);border-radius:999px;min-height:38px;padding:0 15px;font-size:14.5px;font-weight:600}
+.chipbtn[aria-pressed="true"]{background:var(--accent-soft);border-color:var(--accent);color:var(--accent)}
+.subsec{display:flex;flex-direction:column;gap:12px;border:1px solid var(--line);border-radius:var(--r);padding:14px;background:color-mix(in srgb,var(--sunk) 45%,transparent)}
+.subsec-h{display:flex;align-items:center;gap:8px;font-weight:700;font-size:15px}
+.subsec-h svg{width:18px;height:18px;color:var(--accent)}
+.subsec .hint{font-size:12.5px;color:var(--muted)}
+.subsec .pickgrid{max-height:210px}
+.appver{font-size:12.5px;color:var(--muted);text-align:center;margin:0}
 .stepper{display:grid;grid-template-columns:60px 1fr 60px;border:1px solid var(--line);border-radius:var(--r);overflow:hidden;height:58px;background:var(--bg)}
 .stepper button{border:0;background:var(--sunk);font-size:26px;font-weight:600;color:var(--ink)}
 .stepper button:active{background:var(--accent-soft);color:var(--accent)}
@@ -503,23 +515,26 @@ label.crow{cursor:pointer}
 /* 직원 안내문 A4 (크기는 종이 폭 기준 cqw) */
 .posterwrap{container-type:inline-size;width:100%;border-radius:8px;box-shadow:var(--shadow);overflow:hidden;background:#fff}
 .poster{width:100cqw;aspect-ratio:210/297;overflow:hidden;background:#fff;color:#0E1A33;padding:5.5cqw 6.5cqw;display:flex;flex-direction:column;gap:2.8cqw;font-family:var(--font-ui)}
-.ps-head{display:flex;align-items:center;gap:3cqw;border-bottom:.5cqw solid #13265C;padding-bottom:2.6cqw}
+.ps-head{display:flex;align-items:center;gap:3cqw;border-bottom:.5cqw solid #13265C;padding-bottom:2.6cqw;min-width:0}
+.ps-head>div{min-width:0}
 .ps-head .logo{width:9cqw;height:11cqw}
 .ps-brand{font-size:2.6cqw;font-weight:700;color:#2453C6;letter-spacing:.05em}
 .ps-title{font-size:5.4cqw;font-weight:700;letter-spacing:-.01em}
 .ps-sub{font-size:2.6cqw;color:#55607A;margin-top:.5cqw}
 .ps-qr{display:flex;align-items:center;gap:4cqw;background:#EEF2F7;border-radius:2cqw;padding:3cqw}
 .ps-qr svg{width:24cqw;height:24cqw;flex:none;background:#fff;border-radius:1cqw}
-.ps-qr div{display:flex;flex-direction:column;gap:1.2cqw;font-size:2.4cqw;color:#5A6783}
+.ps-qr>div{display:flex;flex-direction:column;gap:1.2cqw;font-size:2.4cqw;color:#5A6783;min-width:0;flex:1}
 .ps-qr b{font-size:3.6cqw;color:#0E1A33}
-.ps-url{font-family:var(--font-mono);font-size:2.45cqw;white-space:nowrap;color:#13265C;font-weight:600;word-break:break-all}
-.ps-steps{list-style:none;margin:0;padding:0;display:grid;grid-template-columns:1fr 1fr;gap:2.6cqw 3.4cqw;flex:1;align-content:start}
-.ps-steps li{display:flex;gap:2cqw;align-items:flex-start}
+.ps-url{font-family:var(--font-mono);font-size:2.35cqw;color:#13265C;font-weight:600;overflow-wrap:anywhere}
+.ps-steps{list-style:none;margin:0;padding:0;display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:2.6cqw 3.4cqw;flex:1;align-content:start}
+.ps-steps li{display:flex;gap:2cqw;align-items:flex-start;min-width:0}
+.ps-steps li>div{min-width:0;flex:1}
+.poster{word-break:keep-all;overflow-wrap:anywhere;-webkit-text-size-adjust:100%;text-size-adjust:100%}
 .ps-steps .n{flex:none;width:6cqw;height:6cqw;border-radius:50%;background:#13265C;color:#fff;display:grid;place-items:center;font-size:3cqw;font-weight:700}
 .ps-steps b{font-size:3cqw;display:block;margin-bottom:.6cqw}
 .ps-steps p{margin:0;font-size:2.35cqw;line-height:1.5;color:#33415C}
 .ps-foot{border-top:.3cqw solid #D2DAE6;padding-top:2cqw;font-size:2.3cqw;color:#5A6783;text-align:center}
-.ps-btn{display:inline-block;align-self:flex-start;background:#2453C6;color:#fff;border-radius:1.4cqw;padding:1.1cqw 2.2cqw;font-size:2.3cqw;font-weight:700;text-decoration:none;line-height:1.4}
+.ps-btn{display:inline-block;align-self:flex-start;max-width:100%;background:#2453C6;color:#fff;border-radius:1.4cqw;padding:1.1cqw 2.2cqw;font-size:2.3cqw;font-weight:700;text-decoration:none;line-height:1.4}
 .qrlabel .qropen{margin-top:6px;min-height:34px}
 /* 자재 첫 화면 바로가기 */
 .quicklinks{display:grid;grid-auto-flow:column;grid-auto-columns:minmax(0,1fr);gap:8px}
@@ -545,4 +560,4 @@ label.crow{cursor:pointer}
 .thumb.none svg{width:20px;height:20px;opacity:.45}
 .cartlist .crow > .iconbtn{margin-left:6px}
 
-@media print{body *{visibility:hidden}#labels,#labels *{visibility:visible}#labels{position:absolute;left:0;top:0;width:100%;grid-template-columns:repeat(4,1fr)}.qrlabel{break-inside:avoid}body.print-poster{background:#fff}body.print-poster .posterwrap{position:absolute;left:0;top:0;width:210mm;box-shadow:none;border-radius:0}body.print-poster #poster,body.print-poster #poster *{visibility:visible}#poster{page:poster;-webkit-print-color-adjust:exact;print-color-adjust:exact}}@page poster{size:A4;margin:0}@media print{.noprint{display:none!important}}
+@media print{body *{visibility:hidden}#labels,#labels *{visibility:visible}#labels{position:absolute;left:0;top:0;width:100%;grid-template-columns:repeat(4,1fr)}.qrlabel{break-inside:avoid}body.print-poster{background:#fff!important}body.print-poster>*:not(#printbox){display:none!important}body.print-poster #printbox{display:block!important;page:poster}body.print-poster #printbox,body.print-poster #printbox *{visibility:visible}#printbox .posterwrap{width:min(100%,calc(100vh * 210 / 297 - 2mm));margin:0 auto;box-shadow:none;border-radius:0}#printbox .poster{-webkit-print-color-adjust:exact;print-color-adjust:exact}}#printbox{display:none}@page poster{size:A4;margin:0}@media print{.noprint{display:none!important}}
