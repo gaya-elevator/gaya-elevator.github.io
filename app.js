@@ -10,7 +10,7 @@ const CONFIG = Object.assign({
   STORAGE_WARN: 0.8
 }, window.GAYA_CONFIG || {});
 const DEMO = !CONFIG.SUPABASE_URL;
-const APP_VER = '56ba3d21';
+const APP_VER = '22c13e43';
 
 /* ───────── 작은 도구들 ───────── */
 const $ = (s, r = document) => r.querySelector(s);
@@ -1121,6 +1121,7 @@ function makeLiveAPI() {
     pushKey: () => rpc('push_key'),
     pushSubscribe: (sub, ua) => { const j = sub.toJSON ? sub.toJSON() : sub; return rpc('push_subscribe', { p_endpoint: j.endpoint, p_p256dh: (j.keys || {}).p256dh, p_auth: (j.keys || {}).auth, p_ua: ua || '' }); },
     pushUnsubscribe: endpoint => rpc('push_unsubscribe', { p_endpoint: endpoint }),
+    pushTest: () => rpc('push_test'),
 
     async bootstrap() {
       const nd = x => x.is('deleted_at', null);
@@ -2119,8 +2120,9 @@ VIEW['more.menu'] = () => {
       <div class="themepick"><div class="seg block" role="group" aria-label="글자 크기">${[['md', '보통'], ['lg', '크게']].map(([v, l]) => `<button data-act="size" data-v="${v}" aria-pressed="${sizeNow() === v}" ${v === 'lg' ? 'style="font-size:16px"' : ''}>가 ${l}</button>`).join('')}</div></div></div></section>
     ${Object.keys(offList()).length ? `<section class="sec"><div class="sec-h"><h2>폰에 저장한 자료</h2><span class="aside">이 기기</span></div><div class="ledger"><div class="lrow"><span class="ic">${ic('phone')}</span><div class="main"><span class="t">${Object.keys(offList()).length}개 · ${fmtSize(offTotal())}</span><span class="s">☆ 로 「내 저장함」에 넣은 자료는 폰에 저장돼 전파가 없어도 열립니다</span></div><button class="btn sm" data-act="docsMode" data-m="mine">내 저장함</button><button class="btn sm ghost" data-act="offClear">모두 지우기</button></div></div></section>` : ''}
     ${DEMO ? '' : (() => { const [ok, why] = pushState(); return `<section class="sec"><div class="sec-h"><h2>폰 알림</h2><span class="aside">이 기기 · ${esc(S.user.name)}</span></div><div class="ledger">
-      <label class="lrow" style="cursor:${ok ? 'pointer' : 'default'}"><span class="ic">${ic('bell')}</span><div class="main"><span class="t">폰 알림 받기</span><span class="s">${esc(why)}</span></div><input type="checkbox" class="switch" data-act="pushToggle" ${pushOn() ? 'checked' : ''} ${ok || pushOn() ? '' : 'disabled'} aria-label="폰 알림 받기"></label></div>
-      ${pushOn() ? `<p class="muted" style="font-size:12.5px;margin:0">알림을 누르면 앱이 열리며 그 화면으로 갑니다. 로그아웃하면 이 폰으로 오던 알림도 끊깁니다.</p>` : ''}</section>`; })()}
+      <label class="lrow" style="cursor:${ok ? 'pointer' : 'default'}"><span class="ic">${ic('bell')}</span><div class="main"><span class="t">폰 알림 받기</span><span class="s">${esc(why)}</span></div><input type="checkbox" class="switch" data-act="pushToggle" ${pushOn() ? 'checked' : ''} ${ok || pushOn() ? '' : 'disabled'} aria-label="폰 알림 받기"></label>
+      ${pushOn() ? `<div class="lrow"><span class="ic">${ic('share')}</span><div class="main"><span class="t">시험 알림 보내기</span><span class="s">누르면 몇 초 안에 이 폰으로 「폰 알림 시험」 알림이 옵니다</span></div><button class="btn sm" data-act="pushTest" data-write ${S.busy ? 'disabled' : ''}>보내기</button></div>` : ''}</div>
+      ${pushOn() ? `<p class="muted" style="font-size:12.5px;margin:0">알림이 오는 때: ${can(S.user, 'users') ? '재고가 최소 수량 아래로 내려갈 때 · 새 직원이 가입 신청을 할 때 · ' : ''}내가 댓글을 단 자재·자료나 내가 올린 자료에 다른 사람이 댓글을 달 때. 알림을 누르면 그 화면이 열립니다. 로그아웃하면 이 폰으로 오던 알림도 끊깁니다.</p>` : ''}</section>`; })()}
     <section class="sec"><div class="sec-h"><h2>알림 창 설정</h2><span class="aside">이 기기에만 저장</span></div><div class="ledger">
       ${[['done', 'check', '저장 완료 알림', '「출고했습니다」처럼 저장한 뒤 아래에 잠깐 뜨는 알림'], ['undo', 'undo', '되돌리기 버튼', '입고·출고·이동 직후 8초 동안 뜨는 「되돌리기」'], ['install', 'phone', '홈 화면 추가 안내', '자재 첫 화면 맨 위의 파란 상자']].map(([k, i, t, s]) => `<label class="lrow" style="cursor:pointer"><span class="ic">${ic(i)}</span><div class="main"><span class="t">${t}</span><span class="s">${s}</span></div><input type="checkbox" class="switch" data-act="pref" data-k="${k}" ${pref(k) ? 'checked' : ''} aria-label="${t}"></label>`).join('')}</div>
       <p class="muted" style="font-size:12.5px;margin:0">저장 실패·연결 끊김 같은 빨간 알림은 꺼도 항상 뜹니다.</p></section>
@@ -3402,7 +3404,13 @@ function pushResync() {
   pushSync().catch(e => console.warn('push sync', e));
 }
 Object.assign(ACT, {
-  pushToggle: async (d, el) => { const want = el.checked; el.checked = !want; if (want) await pushEnable(); else await pushDisable(); render(); }
+  pushToggle: async (d, el) => { const want = el.checked; el.checked = !want; if (want) await pushEnable(); else await pushDisable(); render(); },
+  pushTest: async () => { // 이 폰의 등록을 다시 맞춘 뒤 서버에 시험 알림 하나를 부탁한다
+    if (!online()) return toast('오프라인이라 보낼 수 없습니다. 연결되면 다시 눌러 주세요.', true);
+    if (pushPerm() !== 'granted') return toast('폰 설정에서 이 앱의 알림이 꺼져 있습니다. 허용한 뒤 다시 눌러 주세요.', true);
+    try { progress('시험 알림을 보내는 중…'); await pushSync(); progress(null); } catch (e) { progress(null); return toast(isNet(e) ? NET_MSG : (e.message || '폰 알림 등록을 확인하지 못했습니다.'), true); }
+    run(() => S.api.pushTest(), n => `시험 알림을 보냈습니다. 몇 초 안에 「폰 알림 시험」이 뜹니다${n > 1 ? ` (이 계정으로 알림을 켠 기기 ${n}대 모두)` : ''}. 안 뜨면 폰 설정 › 알림에서 이 앱이 허용돼 있는지 보세요.`, { reload: false });
+  }
 });
 if ('serviceWorker' in navigator) navigator.serviceWorker.addEventListener('message', e => { // 앱이 열린 채로 폰 알림을 누른 경우
   const m = e.data || {}; if (m.type !== 'gaya-open') return;
