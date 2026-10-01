@@ -106,7 +106,10 @@ main{flex:1;padding:16px 16px calc(var(--tabh) + 30px + env(safe-area-inset-bott
 .seg button svg{width:17px;height:17px;vertical-align:-3px;margin-right:5px}
 .themepick{padding:0 16px 14px}
 .toolbar{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
-.toolbar.nowrap{flex-wrap:nowrap}.toolbar.nowrap input{min-width:0;flex:1 1 auto;width:auto}.toolbar.nowrap .btn{min-height:50px;padding:0 13px;flex:none}
+.toolbar.nowrap{flex-wrap:nowrap}.toolbar.nowrap input,.toolbar.nowrap select{min-width:0;flex:1 1 auto;width:auto}.toolbar.nowrap .btn{min-height:50px;padding:0 13px;flex:none}
+#sh-cadd,.cmrow input{height:50px;border:1px solid var(--line);border-radius:var(--r-sm);background:var(--bg);padding:0 12px;font-size:16px;color:var(--ink);min-width:0;flex:1 1 auto;outline:0}
+#sh-cadd:focus,.cmrow input:focus{border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-soft);background:var(--surface)}
+.cmrow{gap:8px;align-items:center}.cmrow .btn{flex:none}.cmrow input{height:42px}.cmrow.del{background:var(--crit-soft)}.cmrow.del .s{white-space:normal}
 .toolbar.fill{gap:6px}.toolbar.fill .btn{flex:1 1 auto;padding:0 10px;justify-content:center;white-space:nowrap}
 .toolbar .grow{flex:1}
 .btn{display:inline-flex;align-items:center;justify-content:center;gap:7px;min-height:44px;padding:0 16px;border-radius:var(--r-sm);border:1px solid var(--line);background:var(--surface);font-weight:600;font-size:15px;white-space:nowrap;text-decoration:none;color:var(--ink)}

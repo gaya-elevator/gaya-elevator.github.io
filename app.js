@@ -10,7 +10,7 @@ const CONFIG = Object.assign({
   STORAGE_WARN: 0.8
 }, window.GAYA_CONFIG || {});
 const DEMO = !CONFIG.SUPABASE_URL;
-const APP_VER = '6b56a629';
+const APP_VER = '3b3611ee';
 
 /* ───────── 작은 도구들 ───────── */
 const $ = (s, r = document) => r.querySelector(s);
@@ -658,15 +658,26 @@ function makeDemoAPI() {
     },
     async saveCategory(x) {
       await tick(); need('category');
-      if (!String(x.name || '').trim()) fail('분류 이름을 입력하세요.');
-      if (!x.id) { const c = { id: uid('c'), parent_id: x.parent_id || null, name: x.name.trim(), sort: D.categories.length }; D.categories.push(c); log('분류 추가', 'category', c.id, c.name); save(); return c.id; }
-      const c = byId(D.categories, x.id); const old = c.name; c.name = x.name.trim(); log('분류 수정', 'category', c.id, old + ' → ' + c.name); save(); return c.id;
+      const nm = String(x.name || '').trim(); if (!nm) fail('분류 이름을 입력하세요.');
+      const dup = (par, except) => D.categories.some(c => !c.deleted_at && (c.parent_id || null) === (par || null) && c.name === nm && c.id !== except);
+      if (!x.id) {
+        if (x.op_id && D.ops && D.ops[x.op_id] != null) return D.ops[x.op_id];
+        if (dup(x.parent_id)) fail('같은 이름의 분류가 이미 있습니다: ' + nm);
+        const c = { id: uid('c'), parent_id: x.parent_id || null, name: nm, sort: D.categories.length }; D.categories.push(c); log('분류 추가', 'category', c.id, c.name);
+        if (x.op_id) { D.ops = D.ops || {}; D.ops[x.op_id] = c.id; } save(); return c.id;
+      }
+      const c = byId(D.categories, x.id); if (!c || c.deleted_at) fail('이미 지워졌거나 없는 분류입니다. 화면을 새로 고친 뒤 확인하세요.');
+      if (c.name === nm) return c.id;
+      if (dup(c.parent_id, c.id)) fail('같은 이름의 분류가 이미 있습니다: ' + nm);
+      const old = c.name; c.name = nm; log('분류 수정', 'category', c.id, old + ' → ' + c.name); save(); return c.id;
     },
     async deleteCategory(id) {
       await tick(); need('category');
-      if (D.categories.some(c => c.parent_id === id && !c.deleted_at)) fail('안에 하위 분류가 있어 지울 수 없습니다.');
-      if (D.items.some(i => i.category_id === id && !i.deleted_at)) fail('이 분류에 품목이 있습니다. 품목의 분류를 먼저 바꾸세요.');
-      const c = byId(D.categories, id); c.deleted_at = now(); log('분류 삭제', 'category', id, c.name); save();
+      const c = byId(D.categories, id); if (!c || c.deleted_at) fail('이미 지워졌거나 없는 분류입니다. 화면을 새로 고친 뒤 확인하세요.');
+      const kids = D.categories.filter(k => k.parent_id === id && !k.deleted_at); kids.forEach(k => { k.parent_id = c.parent_id || null; });
+      const its = D.items.filter(i => i.category_id === id); its.forEach(i => { i.category_id = c.parent_id || null; });
+      const n = its.filter(i => !i.deleted_at).length; const up = c.parent_id ? (byId(D.categories, c.parent_id) || {}).name : '분류 없음';
+      c.deleted_at = now(); log('분류 삭제', 'category', id, c.name + (n ? ` (품목 ${n}개 → ${up})` : '') + (kids.length ? ` (하위 분류 ${kids.length}개 → 한 칸 위로)` : '')); save();
     },
 
     /* 자료 */
@@ -985,7 +996,8 @@ function canRetry(url, o) {
   return '';
 }
 let lastNet = Date.now(), lastTouch = Date.now();
-['pointerdown', 'keydown', 'input'].forEach(t => document.addEventListener(t, () => { lastTouch = Date.now(); }, { capture: true, passive: true }));
+['pointerdown', 'keydown', 'input', 'scroll'].forEach(t => document.addEventListener(t, () => { lastTouch = Date.now(); }, { capture: true, passive: true }));
+document.addEventListener('visibilitychange', () => { if (!document.hidden) lastTouch = Date.now(); });
 async function sbFetch(u, o = {}) {
   const url = typeof u === 'string' ? u : (u && u.url) || String(u); const kind = canRetry(url, o);
   const waits = kind === 'write' ? [6000, 10000, 20000] : kind === 'read' ? [10000, 15000, 25000] : [25000];
@@ -1006,14 +1018,15 @@ function makeLiveAPI() {
     auth: { persistSession: true, autoRefreshToken: true, storageKey: 'gaya-auth' },
     global: { fetch: sbFetch }
   });
-  // 앱을 쓰는 동안(3분 안에 화면을 만졌으면) 연결이 식지 않게 25초마다 아주 작은 요청을 보낸다.
-  // 품목을 적는 몇 분 사이에 연결이 끊겨 「저장」이 멈추던 일을 막는다. 화면을 끄거나 다른 앱으로 가면 보내지 않는다.
+  // 연결 유지: 앱 화면이 켜져 있고 10분 안에 화면을 만졌으면, 20초 넘게 서버와 주고받은 것이 없을 때 아주 작은 요청(1KB 안팎)을 보낸다.
+  // 통신사는 몇 분 조용한 연결을 몰래 끊는데, 폰은 그걸 모르고 다음 저장을 끊긴 연결로 보내 오래 기다리게 된다(서버 기록으로 확인).
+  // 화면을 끄거나 다른 앱으로 가면 보내지 않는다. 저장 방식(서버가 바로 확인)은 그대로라 여러 직원이 써도 수량이 엇갈리지 않는다.
   const warm = (idle = 20000) => {
     if (document.hidden || !S.user || !online()) return;
     const now = Date.now(); if (now - lastNet < idle) return;
     lastNet = now; sb.from('categories').select('id', { head: true }).limit(1).then(() => {}, () => {});
   };
-  setInterval(() => { if (!S.busy && Date.now() - lastTouch < 180000) warm(25000); }, 5000);
+  setInterval(() => { if (!S.busy && Date.now() - lastTouch < 600000) warm(20000); }, 5000);
   let me = null;
   const email = emp => String(emp).trim().toLowerCase() + '@' + CONFIG.EMAIL_DOMAIN;
   const AUTH_MSG = '로그인이 풀렸습니다. 다시 로그인해 주세요. (다른 기기에서 로그아웃했거나 오래 쓰지 않으면 이렇게 됩니다)';
@@ -1413,10 +1426,16 @@ async function loadCache() {
 /* ───────── 이동 ─────────
    휴대폰 「뒤로」 버튼: 앱 안에 늘 한 칸짜리 덫(trap) 기록을 두고, 눌리면
    시트 닫기 → 이전 화면 → 첫 탭 순서로 처리한 뒤 덫을 다시 깐다. 첫 화면에서 한 번 더 누르면 앱이 닫힌다. */
+/* 시트 닫기: 다른 시트 위에 열린 시트(예: 품목 추가 → 분류 편집)면 아래 시트로 돌아간다 */
+function closeSheet() {
+  const b = S.sheet && S.sheet.back; S.sheet = b || null;
+  if (b && b.type === 'item' && b.d.category_id && S.ix && !S.ix.cat.has(b.d.category_id)) b.d.category_id = ''; // 편집에서 지운 분류
+  if (b) b.err = ''; S.sheetFocused = true; render();
+}
 function ensureTrap() { try { if (!history.state || !history.state.gayaTrap) history.pushState({ gayaTrap: 1 }, ''); } catch {} }
 window.addEventListener('popstate', () => {
   if (!S.user) return;
-  if (S.sheet) { S.sheet = null; render(); ensureTrap(); return; }
+  if (S.sheet) { closeSheet(); ensureTrap(); return; }
   if (S.stack.length > 1) { back(); ensureTrap(); return; }
   if (S.tab !== 'items' || route().node) { goTab('items', true); ensureTrap(); return; }
   toast('뒤로 버튼을 한 번 더 누르면 앱이 닫힙니다.');
@@ -1428,7 +1447,7 @@ function nav(r, replace = false) {
   onEnterRoute();
 }
 function back() {
-  if (S.sheet) { S.sheet = null; render(); return; }
+  if (S.sheet) { closeSheet(); return; }
   if (S.stack.length > 1) { S.stack.pop(); S.tab = route().tab; render(); onEnterRoute(); }
 }
 function resetStack(r) { S.stack = [r]; S.tab = r.tab; ensureTrap(); render(); window.scrollTo(0, 0); onEnterRoute(); }
@@ -1610,7 +1629,7 @@ document.addEventListener('change', e => {
 document.addEventListener('toggle', e => { if (e.target.id === 'label-pick') S.labelsOpen = e.target.open; }, true);
 document.addEventListener('submit', e => { e.preventDefault(); const f = ACT[e.target.dataset.submit]; if (f) f(e.target.dataset, e.target); });
 document.addEventListener('keydown', e => {
-  if (e.key === 'Escape' && S.sheet) { S.sheet = null; render(); }
+  if (e.key === 'Escape' && S.sheet) closeSheet();
   if ((e.key === 'Enter' || e.key === ' ') && e.target.matches('[role="button"][data-act]')) { e.preventDefault(); e.target.click(); }
 });
 window.addEventListener('online', () => { render(); if (S.waitOnline) { S.waitOnline = false; connect(); } else if (S.user) refresh(); });
@@ -2513,8 +2532,8 @@ function sheetView() {
       const units = UNITS.includes(u0) ? UNITS : [u0, ...UNITS];
       const catField = `<div class="field"><label for="${d.cat_new ? 'sh-newcat' : 'sh-cat'}">분류 <span class="opt">(선택)</span></label>
           ${d.cat_new ? `<div class="toolbar nowrap"><input id="sh-newcat" class="grow" maxlength="100" data-bind="new_category" value="${esc(d.new_category || '')}" placeholder="새 분류 이름 (예: 도어 부품)" autocomplete="off" enterkeyhint="done"><button type="button" class="btn primary" data-act="catAddInline" ${S.busy ? 'disabled' : ''}>${ic('plus')}추가</button><button type="button" class="btn" data-act="catPickBack">취소</button></div>`
-            : `<select id="sh-cat" data-bind="category_id"><option value="">분류 없음</option>${cats.map(({ n, depth }) => `<option value="${n.id}" ${d.category_id === n.id ? 'selected' : ''}>${'  '.repeat(depth)}${depth ? '└ ' : ''}${esc(n.name)}</option>`).join('')}<option value="__new">＋ 새 분류 만들기…</option></select>`}
-          <span class="hint">${d.cat_new ? '이름을 적고 <b>추가</b>를 누르면 분류가 생기고 바로 골라집니다.' : '분류는 자재를 종류별로 묶는 이름표입니다 (예: 도어 부품 · 로프·도르래 · 안전 장치). 자재 첫 화면 「분류별」 보기에서 이 묶음으로 모아 봅니다. 정하지 않아도 됩니다.'}</span></div>`;
+            : `<div class="toolbar nowrap"><select id="sh-cat" data-bind="category_id"><option value="">분류 없음</option>${cats.map(({ n, depth }) => `<option value="${n.id}" ${d.category_id === n.id ? 'selected' : ''}>${'  '.repeat(depth)}${depth ? '└ ' : ''}${esc(n.name)}</option>`).join('')}<option value="__new">＋ 새 분류 만들기…</option></select><button type="button" class="btn" data-act="catManage">${ic('edit')}편집</button></div>`}
+          <span class="hint">${d.cat_new ? '이름을 적고 <b>추가</b>를 누르면 분류가 생기고 바로 골라집니다.' : '분류는 자재를 종류별로 묶는 이름표입니다 (예: 도어 부품 · 로프·도르래 · 안전 장치). 자재 첫 화면 「분류별」 보기에서 이 묶음으로 모아 봅니다. 정하지 않아도 됩니다. <b>편집</b>에서 분류 이름을 바꾸거나 지웁니다.'}</span></div>`;
       h = sheetHead(isNew ? '품목 추가' : '품목 수정') + `<div class="field"><label for="sh-name">품명</label><input id="sh-name" maxlength="200" data-bind="name" value="${esc(d.name || '')}" placeholder="예: 도어 롤러" data-autofocus></div>
         <div class="row2"><div class="field"><label for="sh-spec">규격·사양</label><input id="sh-spec" maxlength="200" data-bind="spec" value="${esc(d.spec || '')}" placeholder="예: Ø62 행거용"></div><div class="field"><label for="sh-maker">제조사</label><input id="sh-maker" maxlength="100" data-bind="maker" value="${esc(d.maker || '')}"></div></div>
         <div class="field"><label for="sh-models">적용 기종</label><input id="sh-models" maxlength="500" data-bind="models" value="${esc(d.models || '')}" placeholder="예: GEN2, STVF"></div>
@@ -2528,6 +2547,20 @@ function sheetView() {
         <div class="field"><label for="sh-memo">메모 <span class="opt">(선택)</span></label><textarea id="sh-memo" maxlength="3000" data-bind="memo">${esc(d.memo || '')}</textarea></div>
         ${sheetErr()}${okBtn(isNew ? '품목 추가' : '저장')}
         ${d.id ? `<button class="btn danger block" data-act="itemDelete" data-id="${d.id}" data-write>${ic('trash')}품목 삭제</button>` : ''}`;
+      break;
+    }
+    case 'catManage': {
+      const rows = flatTree(S.ix.catKids); const cnt = id => S.cache.items.filter(i => i.category_id === id).length;
+      const pad = depth => `padding-left:${14 + depth * 18}px`;
+      h = sheetHead('분류 편집', '자재를 종류별로 묶는 이름표 · 이름 바꾸기·지우기·추가') + `<div class="toolbar nowrap"><input id="sh-cadd" maxlength="100" data-bind="add" value="${esc(d.add || '')}" placeholder="새 분류 이름 (예: 도어 부품)" autocomplete="off" enterkeyhint="done" aria-label="새 분류 이름"><button type="button" class="btn primary" data-act="cmAdd" ${S.busy ? 'disabled' : ''}>${ic('plus')}추가</button></div>
+        ${sheetErr()}
+        <div class="ledger cmlist">${rows.length ? rows.map(({ n, depth }) => {
+          if (d.edit === n.id) return `<div class="lrow cmrow" style="${pad(depth)}"><input id="sh-cren" maxlength="100" data-bind="editName" value="${esc(d.editName ?? n.name)}" aria-label="새 이름"><button type="button" class="btn sm primary" data-act="cmRenameOk" ${S.busy ? 'disabled' : ''}>저장</button><button type="button" class="btn sm" data-act="cmCancel">취소</button></div>`;
+          if (d.del === n.id) { const k = cnt(n.id), kids = (S.ix.catKids.get(n.id) || []).length, up = n.parent_id ? (S.ix.cat.get(n.parent_id) || {}).name : '분류 없음';
+            return `<div class="lrow cmrow del" style="${pad(depth)}"><div class="main"><span class="t">「${esc(n.name)}」을(를) 지울까요?</span><span class="s">${[k ? `이 분류의 품목 ${k}개는 「${esc(up)}」으로 바뀝니다` : '이 분류를 쓰는 품목은 없습니다', kids ? `하위 분류 ${kids}개는 한 칸 위로 옮겨집니다` : ''].filter(Boolean).join(' · ')}</span></div><button type="button" class="btn sm danger" data-act="cmDeleteOk" ${S.busy ? 'disabled' : ''}>지우기</button><button type="button" class="btn sm" data-act="cmCancel">취소</button></div>`; }
+          return `<div class="lrow cmrow" style="${pad(depth)}"><span class="ic">${ic('tag')}</span><div class="main"><span class="t">${esc(n.name)}</span><span class="s">품목 ${cnt(n.id)}개</span></div><button type="button" class="btn sm" data-act="cmRename" data-id="${n.id}">${ic('edit')}이름</button><button type="button" class="btn sm danger" data-act="cmDelete" data-id="${n.id}" aria-label="${esc(n.name)} 지우기">${ic('trash')}</button></div>`;
+        }).join('') : empty('tag', '아직 분류가 없습니다.', '위에 이름을 적고 「추가」를 누르세요.')}</div>
+        <button type="button" class="btn block big" data-act="sheetClose">${S.sheet.back ? '다 했어요 · 품목 화면으로' : '닫기'}</button>`;
       break;
     }
     case 'memo':
@@ -2786,8 +2819,8 @@ const toItemsTab = () => { if (S.tab !== 'items') { S.lastTab[S.tab] = S.stack; 
 Object.assign(ACT, {
   tab: d => goTab(d.t),
   back: () => back(),
-  scrim: (d, el, e) => { if (e.target === el) { S.sheet = null; render(); } },
-  sheetClose: () => { S.sheet = null; render(); },
+  scrim: (d, el, e) => { if (e.target === el) closeSheet(); },
+  sheetClose: () => closeSheet(),
   theme: d => { store.set(THEME_KEY, d.v); applyTheme(d.v); render(); toast(d.v === 'dark' ? '어두운 화면으로 바꿨습니다' : d.v === 'light' ? '밝은 화면으로 바꿨습니다' : '휴대폰 설정을 따릅니다'); },
   jump: d => { const el = document.getElementById(d.to); if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' }); },
   mode: d => { S.itemsMode = d.m; store.set('gaya-mode', d.m); S.q = ''; S.searchRes = null; resetStack({ ...ROOTS.items }); },
@@ -2826,6 +2859,37 @@ Object.assign(ACT, {
     ask(t.type === 'out' ? '출고를 취소할까요?' : TX_NAME[t.type] + '을 취소할까요?', `${personName(t.user_id)} · ${fmtWhen(t.created_at)} · ${itemTitle(it)} ${t.qty}${unit}. ${t.type === 'out' ? (locPathText(t.from_loc) || '원래 위치') + '에 수량이 다시 더해집니다.' : '수량이 기록 전 상태로 돌아갑니다.'}`, 'cancelTx', { id: d.id, ok: '취소하기' }); },
 
   itemNew: () => { const cat = (route().mode || S.itemsMode) === 'cat'; const n = route().node; openSheet('item', { unit: '개', category_id: cat ? n || '' : '', init_loc: !cat && n && S.ix.loc.has(n) ? n : null }); },
+  catManage: () => { const s = S.sheet; S.sheet = { type: 'catManage', d: { op_id: opId() }, err: '', back: s && s.type === 'item' ? s : null }; S.sheetFocused = true; render(); },
+  cmAdd: async () => {
+    const s = S.sheet; if (!s || S.busy) return; const d = s.d; const name = String(d.add || '').trim();
+    if (!name) { s.err = '새 분류 이름을 적고 「추가」를 누르세요.'; return render(); }
+    if (S.cache.categories.some(c => !c.parent_id && c.name.trim() === name)) { s.err = `「${name}」은(는) 이미 있습니다.`; return render(); }
+    const id = await run(() => S.api.saveCategory({ name, op_id: d.op_id }), null, { keepSheet: true, op: d.op_id, label: '분류 추가 · ' + name });
+    if (!id || S.sheet !== s) return;
+    d.add = ''; d.op_id = opId(); const inp = $('#sh-cadd'); if (inp) inp.value = '';
+    if (s.back && !s.back.d.category_id && typeof id === 'string') s.back.d.category_id = id; // 품목 화면에서 분류를 아직 안 골랐으면 새 분류로
+    render(); toast(`분류 「${name}」를 추가했습니다`);
+  },
+  cmRename: d => { const s = S.sheet; if (!s) return; Object.assign(s.d, { edit: d.id, editName: (S.ix.cat.get(d.id) || {}).name || '', del: null }); s.err = ''; render(); const i = $('#sh-cren'); if (i) { i.focus(); i.select(); } },
+  cmDelete: d => { const s = S.sheet; if (!s) return; Object.assign(s.d, { del: d.id, edit: null }); s.err = ''; render(); },
+  cmCancel: () => { const s = S.sheet; if (!s) return; Object.assign(s.d, { del: null, edit: null }); s.err = ''; render(); },
+  cmRenameOk: async () => {
+    const s = S.sheet; if (!s || S.busy) return; const c = S.ix.cat.get(s.d.edit); if (!c) return ACT.cmCancel();
+    const name = String(s.d.editName || '').trim();
+    if (!name) { s.err = '분류 이름을 적으세요.'; return render(); }
+    if (name === c.name) return ACT.cmCancel();
+    if (S.cache.categories.some(x => x.id !== c.id && (x.parent_id || null) === (c.parent_id || null) && x.name.trim() === name)) { s.err = `「${name}」은(는) 이미 있습니다.`; return render(); }
+    const ok = await run(() => S.api.saveCategory({ id: c.id, name }), null, { keepSheet: true });
+    if (!ok || S.sheet !== s) return;
+    Object.assign(s.d, { edit: null, editName: '' }); render(); toast(`「${c.name}」 → 「${name}」으로 바꿨습니다`);
+  },
+  cmDeleteOk: async () => {
+    const s = S.sheet; if (!s || S.busy) return; const c = S.ix.cat.get(s.d.del); if (!c) return ACT.cmCancel();
+    const ok = await run(() => S.api.deleteCategory(c.id), null, { keepSheet: true });
+    if (!ok || S.sheet !== s) return;
+    s.d.del = null; if (s.back && s.back.d.category_id === c.id) s.back.d.category_id = c.parent_id || '';
+    render(); toast(`분류 「${c.name}」를 지웠습니다`);
+  },
   catPickBack: () => { const s = S.sheet; if (!s) return; s.d.cat_new = false; s.d.new_category = ''; s.err = ''; render(); },
   catAddInline: async () => {
     const s = S.sheet; if (!s || S.busy) return; const name = String(s.d.new_category || '').trim();
@@ -2853,7 +2917,8 @@ Object.assign(ACT, {
   printLabels: () => { if (DEMO) return note('체험판 화면에서는 인쇄 창이 열리지 않습니다. 실제 앱에서는 바로 인쇄됩니다.'); window.print(); },
   catNew: d => openSheet('cat', { parent_id: d.parent || null }),
   catEdit: d => openSheet('cat', { ...clone(S.ix.cat.get(d.id)) }),
-  catDelete: d => ask('분류를 지울까요?', S.ix.cat.get(d.id).name + ' · 품목이나 하위 분류가 있으면 지워지지 않습니다.', 'catDelete', { id: d.id, ok: '지우기', danger: true }),
+  catDelete: d => { const c = S.ix.cat.get(d.id); const k = S.cache.items.filter(i => i.category_id === d.id).length; const up = c.parent_id ? (S.ix.cat.get(c.parent_id) || {}).name : '분류 없음';
+    ask('분류를 지울까요?', c.name + (k ? ` · 이 분류의 품목 ${k}개는 「${up}」으로 바뀝니다.` : ' · 이 분류를 쓰는 품목은 없습니다.') + ((S.ix.catKids.get(d.id) || []).length ? ' 하위 분류는 한 칸 위로 옮겨집니다.' : ''), 'catDelete', { id: d.id, ok: '지우기', danger: true }); },
 
   mkdir: () => openSheet('mkdir', { parent_id: route().folder || null }),
   addLink: () => openSheet('link', { folder_id: route().folder }),
