@@ -3,9 +3,10 @@
    · 데이터(Supabase)와 자료 저장소(구글)는 저장하지 않는다 → 저장·조회는 항상 서버 기준
    · 화면(index.html)과 연결 설정(config.js)은 항상 인터넷에서 먼저 받는다 → 설정을 고치면 바로 반영
    · app.js / app.css 는 버전 번호(?v=)가 붙은 주소 그대로 저장한다 → 새 버전을 올리면 새로 받는다 */
-const VER = 'b21fab09';
+const VER = '8bbb1bbd';
 const SHELL = 'gaya-shell-' + VER;
 const FONT = 'gaya-font';
+const LIB = 'gaya-lib'; // PDF 보기 도구: 버전이 바뀌어도 지우지 않는다 (전파 없는 곳에서 저장한 PDF 를 열기 위해)
 const FILES = ['./', 'index.html', 'app.css?v=' + VER, 'app.js?v=' + VER, 'config.js?v=' + VER, 'manifest.webmanifest', 'icon.svg', 'icon-192.png', 'icon-512.png', 'icon-maskable-512.png', 'apple-touch-icon.png', 'vendor/supabase.js', 'vendor/qrcode.js', 'vendor/jsQR.js'];
 
 self.addEventListener('install', e => {
@@ -35,5 +36,6 @@ self.addEventListener('fetch', e => {
     return;
   }
   if (url.pathname.endsWith('/config.js')) { e.respondWith(networkFirst(req)); return; }
+  if (url.pathname.includes('/vendor/pdf')) { e.respondWith(caches.open(LIB).then(async c => (await c.match(req, { ignoreSearch: true })) || fetch(req).then(r => { if (r.ok) c.put(req, r.clone()); return r; }))); return; }
   e.respondWith(caches.match(req).then(hit => hit || fetch(req).then(r => { if (r.ok) { const c = r.clone(); caches.open(SHELL).then(x => x.put(req, c)); } return r; })));
 });

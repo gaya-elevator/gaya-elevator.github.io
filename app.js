@@ -10,7 +10,7 @@ const CONFIG = Object.assign({
   STORAGE_WARN: 0.8
 }, window.GAYA_CONFIG || {});
 const DEMO = !CONFIG.SUPABASE_URL;
-const APP_VER = 'b21fab09';
+const APP_VER = '8bbb1bbd';
 
 /* ───────── 작은 도구들 ───────── */
 const $ = (s, r = document) => r.querySelector(s);
@@ -65,6 +65,42 @@ function downloadCSV(name, rows) {
   setTimeout(() => { URL.revokeObjectURL(url); a.remove(); }, 1500);
 }
 const pad = n => String(n).padStart(2, '0');
+function downloadBlob(name, blob) {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a'); a.href = url; a.download = name; document.body.appendChild(a); a.click();
+  setTimeout(() => { URL.revokeObjectURL(url); a.remove(); }, 4000);
+}
+
+/* ───────── 한글 검색: 초성(ㄷㅇㄹㄹ → 도어 롤러), 띄어쓰기 무시, 여러 낱말은 모두 포함 ───────── */
+const CHO = 'ㄱㄲㄴㄷㄸㄹㅁㅂㅃㅅㅆㅇㅈㅉㅊㅋㅌㅍㅎ';
+const choOf = c => { const k = c.charCodeAt(0) - 0xAC00; return k >= 0 && k < 11172 ? CHO[Math.floor(k / 588)] : c; };
+function kmatch(text, q) {
+  text = String(text || '').toLowerCase(); q = String(q || '').toLowerCase();
+  if (!q) return true;
+  if (!/[ㄱ-ㅎ]/.test(q)) return text.includes(q);
+  const T = [...text], Q = [...q];
+  outer: for (let i = 0; i + Q.length <= T.length; i++) {
+    for (let j = 0; j < Q.length; j++) { const t = T[i + j], c = Q[j]; if (!(t === c || (/[ㄱ-ㅎ]/.test(c) && choOf(t) === c))) continue outer; }
+    return true;
+  }
+  return false;
+}
+function smatch(text, q) {
+  q = String(q || '').trim(); if (!q) return true;
+  const words = q.split(/\s+/);
+  if (words.every(w => kmatch(text, w))) return true;
+  const squash = x => String(x).replace(/[\s·\-_/().,ØøΦφ×*]+/g, ''); // 띄어쓰기·기호 무시 (롤러62 → 롤러 Ø62)
+  const sq = squash(q); return !!sq && kmatch(squash(text), sq);
+}
+
+/* ───────── 현장: 「현장 이름 + 동 + 호기」 칸을 한 줄(예: 한빛아파트 103동 2호기)로 저장하고, 되읽을 때는 다시 나눈다 ───────── */
+const siteText = d => { const n = String(d.site || '').trim(), dg = String(d.dong || '').trim().replace(/\s*동$/, ''), ho = String(d.ho || '').trim().replace(/\s*호기?$/, ''); return [n, dg && dg + '동', ho && ho + '호기'].filter(Boolean).join(' '); };
+function parseSite(s) {
+  s = String(s || '').trim();
+  const m = s.match(/^(.*?)(?:(?:^|\s+)([0-9A-Za-z][0-9A-Za-z-]*|[가-힣])동)?(?:(?:^|\s+)([0-9A-Za-z-]+)호기)?$/);
+  return m ? { name: m[1].trim(), dong: m[2] || '', ho: m[3] || '' } : { name: s, dong: '', ho: '' };
+}
+const siteHo = p => [p.dong && p.dong + '동', p.ho && p.ho + '호기'].filter(Boolean).join(' ');
 /* 서버 시각 문자열을 날짜로 — 아이폰 사파리는 "2026-10-01 03:00:00.123456+00" 같은 형식을 못 읽는다 */
 function toDate(v) {
   if (v instanceof Date) return v;
@@ -147,6 +183,7 @@ const P = {
   scan: '<path d="M4 8V5a1 1 0 0 1 1-1h3M16 4h3a1 1 0 0 1 1 1v3M20 16v3a1 1 0 0 1-1 1h-3M8 20H5a1 1 0 0 1-1-1v-3"/><path d="M8 8h3v3H8zM13 13h3v3h-3zM13 8h3M8 13v3"/>',
   bell: '<path d="M6 16V11a6 6 0 1 1 12 0v5l1.5 2h-15z"/><path d="M10 20.5a2 2 0 0 0 4 0"/>',
   more: '<path d="M4 6h16M4 12h16M4 18h16"/>',
+  dots: '<circle cx="5" cy="12" r="1.3"/><circle cx="12" cy="12" r="1.3"/><circle cx="19" cy="12" r="1.3"/>',
   search: '<circle cx="11" cy="11" r="6.5"/><path d="m16 16 4.5 4.5"/>',
   back: '<path d="m15 5-7 7 7 7"/>',
   chev: '<path d="m9 5 7 7-7 7"/>',
@@ -231,6 +268,38 @@ function can(u, act, obj) {
 
 /* ───────── 체험판 데이터 계층 ─────────
    실서버(Supabase)용 계층과 같은 이름·같은 동작의 함수를 제공한다. 데이터는 이 기기에만 저장된다. */
+/* 체험판 예시 파일: 캔버스에 그린 쪽 그림을 JPEG 로 만들어 PDF 로 묶는다 (실제 앱에서는 올린 파일 그대로) */
+async function demoSample(d, kind) {
+  const page = (no, total) => new Promise(res => {
+    const c = document.createElement('canvas'); c.width = 1240; c.height = 1754; const g = c.getContext('2d');
+    g.fillStyle = '#fff'; g.fillRect(0, 0, c.width, c.height);
+    g.fillStyle = '#13265C'; g.fillRect(0, 0, c.width, 150);
+    g.fillStyle = '#fff'; g.font = 'bold 46px sans-serif'; g.fillText('가야엘리베이터 · 체험판 예시 파일', 70, 95);
+    g.fillStyle = '#0E1A33'; g.font = 'bold 54px sans-serif'; g.fillText(d.name.replace(/\.[^.]+$/, ''), 70, 280);
+    g.font = '34px sans-serif'; g.fillStyle = '#5A6783'; g.fillText(no + ' / ' + total + ' 쪽 · 전파가 없어도 폰에 저장된 이 파일이 열립니다', 70, 340);
+    g.strokeStyle = '#2453C6'; g.lineWidth = 4;
+    for (let i = 0; i < 6; i++) { const y = 440 + i * 190; g.strokeRect(70, y, 1100, 150); g.fillStyle = '#E3EBFB'; g.fillRect(74, y + 4, 300, 142); g.fillStyle = '#0E1A33'; g.font = 'bold 36px sans-serif'; g.fillText((no - 1) * 6 + i + 1 + '. 항목', 100, y + 88); g.font = '32px sans-serif'; g.fillStyle = '#5A6783'; g.fillText((d.text || '점검 기준 · 결선 · 에러코드').split(' ').slice(0, 4).join(' · '), 410, y + 88); }
+    c.toBlob(b => b.arrayBuffer().then(buf => res({ bytes: new Uint8Array(buf), w: c.width, h: c.height })), 'image/jpeg', .72);
+  });
+  if (kind === 'img') { const p = await page(1, 1); return new Blob([p.bytes], { type: 'image/jpeg' }); }
+  const pages = [await page(1, 2), await page(2, 2)];
+  const enc = new TextEncoder(); const parts = []; let len = 0; const offs = [];
+  const push = x => { const b = typeof x === 'string' ? enc.encode(x) : x; parts.push(b); len += b.length; };
+  const obj = (n, f) => { offs[n] = len; push(n + ' 0 obj\n'); f(); push('\nendobj\n'); };
+  push('%PDF-1.4\n');
+  obj(1, () => push('<< /Type /Catalog /Pages 2 0 R >>'));
+  obj(2, () => push('<< /Type /Pages /Count ' + pages.length + ' /Kids [' + pages.map((_, i) => (3 + i * 3) + ' 0 R').join(' ') + '] >>'));
+  pages.forEach((j, i) => {
+    const pg = 3 + i * 3, im = pg + 1, ct = pg + 2, cs = 'q 595 0 0 842 0 0 cm /Im' + i + ' Do Q';
+    obj(pg, () => push('<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /XObject << /Im' + i + ' ' + im + ' 0 R >> >> /Contents ' + ct + ' 0 R >>'));
+    obj(im, () => { push('<< /Type /XObject /Subtype /Image /Width ' + j.w + ' /Height ' + j.h + ' /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode /Length ' + j.bytes.length + ' >>\nstream\n'); push(j.bytes); push('\nendstream'); });
+    obj(ct, () => push('<< /Length ' + cs.length + ' >>\nstream\n' + cs + '\nendstream'));
+  });
+  const xref = len, total = 3 + pages.length * 3;
+  push('xref\n0 ' + total + '\n0000000000 65535 f \n' + offs.slice(1).map(o => String(o).padStart(10, '0') + ' 00000 n \n').join('') + 'trailer\n<< /Size ' + total + ' /Root 1 0 R >>\nstartxref\n' + xref + '\n%%EOF\n');
+  return new Blob(parts, { type: 'application/pdf' });
+}
+
 function makeDemoAPI() {
   const KEY = 'gaya-demo-v3';
   let D = store.get(KEY, null) || seed();
@@ -394,6 +463,113 @@ function makeDemoAPI() {
       lowCheck(item_id, tb); save();
     },
 
+    /* 여러 개 한 번에 꺼내기: 하나라도 모자라면 아무것도 꺼내지 않는다 */
+    async stockOutMany({ rows, site, note, op_id }) {
+      await tick(); const u = need('stock');
+      if (!rows || !rows.length) fail('꺼낼 자재를 담으세요.');
+      if (rows.length > 50) fail('한 번에 50가지까지 꺼낼 수 있습니다.');
+      if (op_id && D.ops && D.ops[op_id]) return clone(D.ops[op_id]);
+      const want = new Map();
+      rows.forEach(r => { const k = r.item_id + '|' + r.location_id; want.set(k, (want.get(k) || 0) + (+r.qty || 0)); });
+      rows.forEach(r => {
+        const it = byId(D.items, r.item_id); if (!it || it.deleted_at) fail('지워졌거나 없는 품목이 들어 있습니다. 화면을 새로 고친 뒤 다시 하세요.');
+        if (!isInt(r.qty, 1)) fail(itemLabel(it) + ': 수량을 1 이상으로 입력하세요.');
+        const have = (D.stock.find(x => x.item_id === r.item_id && x.location_id === r.location_id) || {}).qty || 0;
+        if (have < want.get(r.item_id + '|' + r.location_id)) fail(itemLabel(it) + ': 이 위치에는 ' + have + '개밖에 없습니다. 수량이나 위치를 확인하세요.');
+      });
+      const ids = rows.map(r => {
+        const it = byId(D.items, r.item_id); const before = totalOf(r.item_id); stockRow(r.item_id, r.location_id).qty -= +r.qty;
+        const tid = uid('t'); D.tx.unshift({ id: tid, op_id: null, type: 'out', item_id: r.item_id, from_loc: r.location_id, to_loc: null, qty: +r.qty, site: site || '', note: note || '', user_id: u.id, created_at: now() });
+        log('출고', 'item', r.item_id, itemLabel(it) + ' ' + r.qty + it.unit + ' ← ' + locPath(r.location_id) + (site ? ' / ' + site : ''));
+        lowCheck(r.item_id, before); return tid;
+      });
+      if (op_id) { D.ops = D.ops || {}; D.ops[op_id] = ids; }
+      save(); return ids;
+    },
+    /* 여러 개 한 번에 입고: 하나라도 안 되면 아무것도 넣지 않는다 */
+    async stockInMany({ rows, note, op_id }) {
+      await tick(); const u = need('stock');
+      if (!rows || !rows.length) fail('입고할 자재가 없습니다.');
+      if (op_id && D.ops && D.ops[op_id]) return clone(D.ops[op_id]);
+      rows.forEach(r => { const it = byId(D.items, r.item_id); if (!it || it.deleted_at) fail('지워졌거나 없는 품목이 들어 있습니다. 화면을 새로 고친 뒤 다시 하세요.');
+        if (!isInt(r.qty, 1)) fail(itemLabel(it) + ': 수량을 1 이상으로 입력하세요.');
+        const l = byId(D.locations, r.location_id); if (!l || l.deleted_at) fail(itemLabel(it) + ': 넣을 위치를 고르세요.'); });
+      const ids = rows.map(r => {
+        const it = byId(D.items, r.item_id); stockRow(r.item_id, r.location_id).qty += +r.qty;
+        const tid = uid('t'); D.tx.unshift({ id: tid, op_id: null, type: 'in', item_id: r.item_id, from_loc: null, to_loc: r.location_id, qty: +r.qty, site: '', note: note || '', user_id: u.id, created_at: now() });
+        log('입고', 'item', r.item_id, itemLabel(it) + ' ' + r.qty + it.unit + ' → ' + locPath(r.location_id)); return tid;
+      });
+      if (op_id) { D.ops = D.ops || {}; D.ops[op_id] = ids; }
+      save(); return ids;
+    },
+    async stockCancelMany(ids, op) {
+      await tick(); const u = me();
+      if (op && D.ops && D.ops[op] != null) return D.ops[op];
+      (ids || []).forEach(id => { const t = byId(D.tx, id); const it = t && byId(D.items, t.item_id);
+        if (!t) fail('기록을 찾지 못했습니다.'); if (t.canceled_by) fail(itemLabel(it) + ': 이미 취소된 기록입니다.');
+        if (!can(u, 'cancel', t)) fail(itemLabel(it) + ': 본인이 7일 안에 한 기록만 취소할 수 있습니다.'); });
+      for (const id of ids) await api.stockCancel({ tx_id: id });
+      if (op) { D.ops = D.ops || {}; D.ops[op] = ids.length; save(); }
+      return ids.length;
+    },
+    /* 재고 실사: 한 위치의 품목 수량을 한꺼번에 맞춘다 (바뀐 품목만 정정 기록) */
+    async stockCount({ location_id, rows, reason, op_id }) {
+      await tick(); const u = need('adjust');
+      if (op_id && D.ops && D.ops[op_id] != null) return D.ops[op_id];
+      const l = byId(D.locations, location_id); if (!l || l.deleted_at) fail('위치를 찾지 못했습니다. 화면을 새로 고친 뒤 다시 하세요.');
+      rows.forEach(r => { const it = byId(D.items, r.item_id); if (!it || it.deleted_at) fail('지워졌거나 없는 품목이 들어 있습니다. 화면을 새로 고친 뒤 다시 하세요.'); if (!isInt(r.qty)) fail(itemLabel(it) + ': 수량을 0 이상의 정수로 입력하세요.'); });
+      let n = 0; const why = String(reason || '').trim() || '실사';
+      rows.forEach(r => {
+        const row = stockRow(r.item_id, location_id); const before = row.qty, q = +r.qty; if (before === q) return;
+        const it = byId(D.items, r.item_id); const tb = totalOf(r.item_id); row.qty = q;
+        D.tx.unshift({ id: uid('t'), op_id: null, type: 'adjust', item_id: r.item_id, from_loc: location_id, to_loc: location_id, qty: q - before, site: '', note: why, user_id: u.id, created_at: now(), before, after: q });
+        log('수량 정정', 'item', r.item_id, itemLabel(it) + ' @' + locPath(location_id) + ' ' + before + ' → ' + q + ' (사유: ' + why + ')');
+        lowCheck(r.item_id, tb); n++;
+      });
+      if (n) log('재고 실사', 'location', location_id, locPath(location_id) + ' · ' + n + '개 품목 수량 맞춤');
+      if (op_id) { D.ops = D.ops || {}; D.ops[op_id] = n; }
+      save(); return n;
+    },
+    async itemsMinSet(rows, op) {
+      await tick(); need('item');
+      if (op && D.ops && D.ops[op] != null) return D.ops[op];
+      let n = 0; const names = [];
+      rows.forEach(r => { const it = byId(D.items, r.id); if (!isInt(r.min_qty)) fail('최소 재고는 0 이상의 정수여야 합니다.'); if (it && !it.deleted_at && it.min_qty !== +r.min_qty) { it.min_qty = +r.min_qty; it.updated_at = now(); n++; if (names.length < 5) names.push(itemLabel(it) + ' ' + it.min_qty); } });
+      if (n) log('최소 재고 조정', 'item', null, n + '개 품목: ' + names.join(', ') + (n > 5 ? ' 외' : ''));
+      if (op) { D.ops = D.ops || {}; D.ops[op] = n; }
+      save(); return n;
+    },
+    /* 현장별 사용 이력 */
+    async siteTx(since) { await tick(); return clone(D.tx.filter(t => t.site && t.created_at >= since)); },
+    async siteDetail(name) { await tick(); return clone(D.tx.filter(t => t.site && parseSite(t.site).name === name)); },
+    /* 위치 한 번에 만들기: 이미 있는 코드는 그대로 두고 안쪽만 채운다 */
+    async locationsBulk(parent, rows, op) {
+      await tick(); need('location');
+      if (op && D.ops && D.ops[op] != null) return D.ops[op];
+      if (!rows || !rows.length) fail('만들 위치가 없습니다.');
+      const codes = []; (function walk(rs) { (rs || []).forEach(r => { const c = String(r.code || '').trim().toUpperCase(); if (c) codes.push(c); walk(r.kids); }); })(rows);
+      const dup = codes.find((c, i) => codes.indexOf(c) !== i); if (dup) fail('같은 라벨 코드가 두 번 들어 있습니다: ' + dup);
+      const par0 = parent ? byId(D.locations, parent) : null; if (parent && (!par0 || par0.deleted_at)) fail('위치를 찾지 못했습니다. 화면을 새로 고친 뒤 다시 하세요.');
+      const live = () => D.locations.filter(l => !l.deleted_at);
+      const made = []; let n = 0;
+      try {
+        (function walk(pid, rs, depth) {
+          (rs || []).forEach(r => {
+            const name = String(r.name || '').trim(); if (!name) fail('이름이 빈 위치가 있습니다.');
+            if (depth > 3) fail('위치는 구역 › 캐비넷·선반 › 칸, 세 단계까지만 만들 수 있습니다.');
+            const c = String(r.code || '').trim().toUpperCase();
+            let ex = c ? live().find(l => (l.code || '').toUpperCase() === c) : live().find(l => (l.parent_id || null) === (pid || null) && l.name === name);
+            if (ex && (ex.parent_id || null) !== (pid || null)) fail('이미 다른 곳(' + locPath(ex.id) + ')에서 쓰는 라벨 코드입니다: ' + c);
+            if (!ex) { const p = byId(D.locations, pid); ex = { id: uid('l'), parent_id: pid || null, name, code: c, kind: !p ? 'zone' : p.parent_id ? 'slot' : 'unit', photo: '', sort: D.locations.length }; D.locations.push(ex); made.push(ex); n++; }
+            walk(ex.id, r.kids, depth + 1);
+          });
+        })(parent || null, rows, !par0 ? 1 : par0.kind === 'zone' ? 2 : par0.kind === 'unit' ? 3 : 4);
+      } catch (e) { D.locations = D.locations.filter(l => !made.includes(l)); throw e; }
+      log('위치 한 번에 추가', 'location', parent || null, (parent ? locPath(parent) : '맨 위') + ' · ' + n + '곳 추가');
+      if (op) { D.ops = D.ops || {}; D.ops[op] = n; }
+      save(); return n;
+    },
+
     /* 품목·위치·분류 */
     async saveItem(x) {
       await tick(); const u = me();
@@ -521,6 +697,15 @@ function makeDemoAPI() {
     async moveDoc(id, folder_id) { await tick(); need('docAdmin'); const d = byId(D.docs, id); const old = folderPath(d.folder_id); d.folder_id = folder_id; log('파일 이동', 'doc', id, d.name + ': ' + old + ' → ' + folderPath(folder_id)); save(); },
     async deleteDoc(id) { await tick(); need('docAdmin'); const d = byId(D.docs, id); d.deleted_at = now(); d.del_root = null; log('파일 삭제', 'doc', id, folderPath(d.folder_id) + ' › ' + d.name + ' → 휴지통'); save(); },
     async docData(id) { const d = byId(D.docs, id); return d ? d.dataurl || null : null; },
+    /* 폰에 저장할 파일 받기 — 체험판은 실제 파일이 없어 예시 파일을 만들어 준다 */
+    async docFile(id, onProg) {
+      const d = byId(D.docs, id); if (!d) fail('없는 자료입니다.');
+      for (let i = 1; i <= 4; i++) { await sleep(150); if (onProg) onProg(i / 4); }
+      if (d.dataurl) return (await fetch(d.dataurl)).blob();
+      const k = fileKind(d.name, d.kind)[0];
+      if (k === 'pdf' || k === 'img') return demoSample(d, k);
+      return new Blob(['체험판 예시 파일: ' + d.name + '\n실제 앱에서는 올린 파일 그대로 받아집니다.'], { type: 'text/plain' });
+    },
 
     async trash() {
       await tick(); need('trash'); const lim = Date.now() - 30 * 864e5;
@@ -541,10 +726,10 @@ function makeDemoAPI() {
 
     async search(q) {
       await tick(); q = q.trim().toLowerCase(); if (!q) return { items: [], docs: [] };
-      const hit = s => String(s || '').toLowerCase().includes(q);
+      const jamo = /[ㄱ-ㅎ]/.test(q);
       return clone({
-        items: D.items.filter(i => !i.deleted_at && (hit(i.name) || hit(i.spec) || hit(i.maker) || hit(i.models) || hit(i.memo))).map(i => i.id),
-        docs: D.docs.filter(d => !d.deleted_at && (hit(d.name) || (d.text && hit(d.text)))).map(d => ({ id: d.id, inside: !hit(d.name) }))
+        items: D.items.filter(i => !i.deleted_at && smatch([i.name, i.spec, i.maker, i.models, i.memo].join(' '), q)).map(i => i.id),
+        docs: D.docs.filter(d => !d.deleted_at && (smatch(d.name, q) || (!jamo && d.text && smatch(d.text, q)))).map(d => ({ id: d.id, inside: !smatch(d.name, q) }))
       });
     },
 
@@ -788,7 +973,7 @@ function makeLiveAPI() {
     try { r = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' }, body: JSON.stringify({ token: session && session.access_token, action, ...payload }) }); }
     catch { if (!navigator.onLine) throw netErr(); throw new Error('자료 저장소(구글 드라이브)에 연결되지 않습니다. 잠시 뒤 다시 해 보고, 계속되면 관리자에게 알려 주세요.'); }
     const j = await r.json().catch(() => ({ ok: false, error: '자료 저장소 응답을 읽지 못했습니다. 잠시 뒤 다시 시도하세요.' }));
-    if (!j.ok) throw new Error(j.error || '저장소 작업 실패');
+    if (!j.ok) throw new Error(/^알 수 없는 작업/.test(j.error || '') ? '자료 저장소가 아직 이 기능을 모릅니다(저장소 새 버전 배포 전). 개발자·관리자에게 알려 주세요.' : (j.error || '저장소 작업 실패'));
     return j;
   }
   const driveAll = async (action, payload) => { for (const s of stores()) { try { await drive(action, payload, s.no); } catch (e) { console.warn('drive', action, e); } } };
@@ -873,6 +1058,18 @@ function makeLiveAPI() {
       if (location_id) x = x.or(`from_loc.eq.${location_id},to_loc.eq.${location_id}`);
       return q(x);
     },
+    stockOutMany: ({ rows, site, note, op_id }) => rpc('stock_out_many', { p_rows: rows, p_site: site || '', p_note: note || '', p_op: op_id || null }),
+    stockInMany: ({ rows, note, op_id }) => rpc('stock_in_many', { p_rows: rows, p_note: note || '', p_op: op_id || null }),
+    stockCancelMany: (ids, op) => rpc('stock_cancel_many', { p_txs: ids, p_op: op || null }),
+    stockCount: ({ location_id, rows, reason, op_id }) => rpc('stock_count', { p_loc: location_id, p_rows: rows, p_reason: reason || '실사', p_op: op_id || null }),
+    itemsMinSet: (rows, op) => rpc('items_min_set', { p_rows: rows, p_op: op || null }),
+    locationsBulk: (parent, rows, op) => rpc('locations_bulk', { p_parent: parent || null, p_rows: rows, p_op: op || null }),
+    siteTx: since => all('tx', 'id,type,item_id,qty,site,user_id,created_at,canceled_by', x => x.neq('site', '').gte('created_at', since).order('created_at', { ascending: false })),
+    async siteDetail(name) {
+      const pat = String(name).replace(/[\\%_]/g, m => '\\' + m) + '%';
+      const rows = await all('tx', '*', x => x.ilike('site', pat).order('created_at', { ascending: false }));
+      return rows.filter(t => parseSite(t.site).name === name);
+    },
     txRange: ({ from, to }) => all('tx', '*', x => x.gte('created_at', from).lt('created_at', to).order('created_at', { ascending: false })),
     async txToday() {
       const t = new Date(); t.setHours(0, 0, 0, 0);
@@ -913,6 +1110,20 @@ function makeLiveAPI() {
     async moveDoc(id, folder_id) { const d = S.ix.doc.get(id); await rpc('doc_move', { p_id: id, p_folder: folder_id }); if (d && d.drive_id) drive('moveFile', { id: d.drive_id, path: pathNames(folder_id) }, d.store_no).catch(e => console.warn(e)); },
     async deleteDoc(id) { const d = S.ix.doc.get(id); await rpc('doc_delete', { p_id: id }); if (d && d.drive_id) drive('trashFile', { id: d.drive_id }, d.store_no).catch(e => console.warn(e)); },
     async docData() { return null; },
+    /* 폰에 저장할 파일 받기: 저장소에서 6MB 씩 나눠 받는다 (등록된 자료만, 50MB 까지) */
+    async docFile(id, onProg) {
+      const d = S.ix.doc.get(id); if (!d || !d.drive_id) throw new Error('파일로 올린 자료만 받을 수 있습니다.');
+      if (d.size > 50 * 1048576) throw new Error('50MB 가 넘는 파일은 폰에 저장할 수 없습니다. 드라이브에서 바로 보세요.');
+      const CH = 6 * 1048576, parts = []; let start = 0, total = null, mime = d.mime || '';
+      while (total === null || start < total) {
+        const r = await drive('download', { id: d.drive_id, start, len: CH }, d.store_no);
+        total = +r.total || 0; if (r.mime) mime = String(r.mime).split(';')[0];
+        const bin = atob(r.data || ''); const u = new Uint8Array(bin.length); for (let i = 0; i < bin.length; i++) u[i] = bin.charCodeAt(i);
+        if (!u.length) break;
+        parts.push(u); start += u.length; if (onProg) onProg(total ? Math.min(1, start / total) : 1);
+      }
+      return new Blob(parts, { type: mime || 'application/octet-stream' });
+    },
     async trash() { return (await rpc('trash_list')).map(r => ({ ...r, where: r.where || '' })); },
     async restore(type, id) {
       const list = await rpc('trash_list'); const row = list.find(r => r.id === id);
@@ -923,11 +1134,10 @@ function makeLiveAPI() {
 
     async search(qs) {
       qs = qs.trim().toLowerCase(); if (!qs) return { items: [], docs: [] };
-      const hit = s => String(s || '').toLowerCase().includes(qs);
-      const items = S.cache.items.filter(i => hit(i.name) || hit(i.spec) || hit(i.maker) || hit(i.models) || hit(i.memo)).map(i => i.id);
-      const byName = S.cache.docs.filter(d => hit(d.name)).map(d => ({ id: d.id, inside: false }));
+      const items = S.cache.items.filter(i => smatch([i.name, i.spec, i.maker, i.models, i.memo].join(' '), qs)).map(i => i.id);
+      const byName = S.cache.docs.filter(d => smatch(d.name, qs)).map(d => ({ id: d.id, inside: false }));
       let inside = [];
-      if (qs.length >= 2 && stores().length) {
+      if (qs.length >= 2 && !/[ㄱ-ㅎ]/.test(qs) && stores().length) {
         try {
           const res = await Promise.all(stores().map(s => drive('search', { q: qs }, s.no).catch(() => ({ ids: [] }))));
           const ids = new Set(res.flatMap(r => r.ids || []));
@@ -1077,6 +1287,9 @@ async function onEnterRoute() {
   try {
     if (r.view === 'item') { const [tx, cm] = await Promise.all([S.api.txList({ item_id: r.id }), S.api.comments('item', r.id)]); VIEWDATA[key] = { tx, cm }; }
     else if (r.tab === 'items' && r.view === 'browse' && !r.node) { const [tx, today, mine] = await Promise.all([S.api.txList({ limit: 6 }), S.api.txToday().catch(() => null), S.api.txList({ user_id: S.user.id, limit: 60 }).catch(() => [])]); VIEWDATA[key] = { tx, today, mine }; }
+    else if (r.view === 'sites') { const y = new Date(); y.setFullYear(y.getFullYear() - 1); VIEWDATA[key] = { list: await S.api.siteTx(y.toISOString()) }; }
+    else if (r.view === 'site') { VIEWDATA[key] = { list: await S.api.siteDetail(r.name) }; }
+    else if (r.view === 'stats') { const [y, m] = r.month.split('-').map(Number); VIEWDATA[key] = statsData(await S.api.txRange({ from: new Date(y, m - 3, 1).toISOString(), to: new Date(y, m, 1).toISOString() }), r.month); }
     else if (r.view === 'history') { const [y, m] = r.month.split('-').map(Number); VIEWDATA[key] = { list: await S.api.txRange({ from: new Date(y, m - 1, 1).toISOString(), to: new Date(y, m, 1).toISOString() }) }; }
     else if (r.view === 'doc') { VIEWDATA[key] = { cm: await S.api.comments('doc', r.id), data: await S.api.docData(r.id) }; }
     else if (r.view === 'list') { VIEWDATA[key] = { list: await S.api.notifications() }; }
@@ -1101,7 +1314,7 @@ let toastTimer;
 function drawToast() {
   const t = $('#toast'); if (!t) return;
   const x = S.toast; if (!x) { t.innerHTML = ''; return; }
-  const pos = S.sheet ? 'top' : $('.fab') ? 'up' : '';
+  const pos = S.sheet ? 'top' : $('.fab') || $('.cartbar') || $('.countbar') || $('.ordbar') ? 'up' : '';
   t.innerHTML = `<div class="toast ${x.err ? 'err' : ''} ${pos} ${x.act ? 'has-act' : ''}" role="status"><span>${esc(x.msg)}</span>${x.act ? `<button class="tact" data-act="toastAct">${esc(x.act.label)}</button>` : ''}</div>`;
 }
 /* 알림 띠. 빨간 알림(err)과 꼭 필요한 안내(must)는 늘 띄우고, 나머지는 더보기 › 알림 창 설정의 「저장 완료 알림」을 따른다 */
@@ -1158,6 +1371,10 @@ document.addEventListener('input', e => {
   if (el.id === 'q-docs') { S.docsQ = el.value; searchDocs(); }
   if (el.id === 'bulk-in' && S.bulk) S.bulk.text = el.value;
   if (el.id === 'q-hist') { S.histQ = el.value; clearTimeout(hT); hT = setTimeout(updatePane, 120); }
+  if (el.id === 'q-sites') { S.sitesQ = el.value; clearTimeout(hT); hT = setTimeout(updatePane, 120); }
+  if (el.id === 'q-cnt') { S.cntQ = el.value; clearTimeout(hT); hT = setTimeout(() => { const b = $('#cnt-add'); if (b) b.innerHTML = countAddList(); }, 120); }
+  if (el.id === 'q-ord') { S.ordQ = el.value; clearTimeout(hT); hT = setTimeout(() => { const b = $('#ord-add'); if (b) b.innerHTML = orderAddList(); }, 120); }
+  if (el.dataset.cnt) { const loc = route().node; const c = countState(loc); c.vals[el.dataset.cnt] = el.value; countSaveLocal(); const row = el.closest('.crow'); if (row) { const cur = qtyAt(el.dataset.cnt, loc); const ch = isInt(el.value) && +el.value !== cur; row.classList.toggle('chg', ch); row.classList.toggle('bad', el.value.trim() !== '' && !isInt(el.value)); const t = row.querySelector('.was'); if (t) t.textContent = ch ? `기록 ${cur} → ${+el.value}` : `기록 ${cur}`; } updateCountBar(); }
 });
 let hT;
 /* 자료 즐겨찾기 · 최근 본 자료 (이 기기에 저장) */
@@ -1190,7 +1407,7 @@ async function refresh() {
     if (u === undefined) return; // 로그인 상태를 확인하지 못함(연결 문제 등) → 아무것도 바꾸지 않는다
     if (u === null || u.status !== 'active') { await ACT.logout(); toast('계정 사용이 중지되었거나 승인이 취소되었습니다. 관리자에게 문의하세요.', true); return; }
     if (u.role !== S.user.role || u.name !== S.user.name) { S.user = { ...S.user, ...u }; store.set('gaya-user', S.user); }
-    await loadCache(); S.serverDown = false; render(); onEnterRoute();
+    await loadCache(); S.serverDown = false; render(); onEnterRoute(); offPrune();
   } catch {}
 }
 
@@ -1214,7 +1431,7 @@ function searchDocs(now) {
     if (!q) { S.docSearchRes = null; return updatePane(); }
     // 파일 이름이 맞는 것은 바로 보여 주고, 파일 안 글자 검색(구글)은 끝나는 대로 더한다
     const lq = q.toLowerCase();
-    S.docSearchRes = S.cache.docs.filter(d => d.name.toLowerCase().includes(lq)).map(d => ({ id: d.id, inside: false }));
+    S.docSearchRes = S.cache.docs.filter(d => smatch(d.name, lq)).map(d => ({ id: d.id, inside: false }));
     S.docSearching = true; updatePane();
     const res = await S.api.search(q).catch(() => null);
     if (seq !== dSeq || q !== S.docsQ.trim()) return;
@@ -1249,6 +1466,7 @@ function render() {
   if (sy != null && $('.sheet')) $('.sheet').scrollTop = sy;
   if (fid) { const n = document.getElementById(fid); if (n) { n.focus({ preventScroll: true }); if (sel) try { n.setSelectionRange(sel[0], sel[1]); } catch {} } }
   if (S.sheet && !S.sheetFocused) { S.sheetFocused = true; const fa = $('.sheet [data-autofocus]'); if (fa) fa.focus(); }
+  afterRender();
 }
 
 /* ───────── 로그인 · 가입 ───────── */
@@ -1305,8 +1523,8 @@ function shell() {
     ${isRoot ? logo('logo', true) : `<button class="iconbtn" data-act="back" aria-label="뒤로">${ic('back')}</button>`}
     <div class="ttl">${isRoot ? '<span class="brandline">가야엘리베이터</span>' : ''}<h1>${esc(out.title)}</h1></div>${out.actions ? `<div class="actions">${out.actions}</div>` : ''}</div>
     ${out.crumbs ? `<nav class="crumbs" aria-label="경로">${out.crumbs}</nav>` : ''}</header>
-  <main id="main">${out.body}</main>
-  ${out.fab || ''}
+  <main id="main" class="${(S.tab === 'items' || S.tab === 'scan') && cart().length && !out.bar ? 'has-bar' : ''} ${out.bar ? 'has-bar' : ''}">${out.body}</main>
+  ${out.fab || ''}${out.bar || ((S.tab === 'items' || S.tab === 'scan') && cart().length ? `<div class="cartbar"><button data-act="cartOpen">${ic('box')}<span class="t">담은 자재 <b>${cart().length}가지</b></span><span class="go">한 번에 출고 ${ic('chev')}</span></button></div>` : '')}
   <nav class="tabbar" aria-label="메뉴"><div class="tabbar-in">${tabs.map(([t, i, l]) => `<button class="tab ${t === 'scan' ? 'scan' : ''}" data-act="tab" data-t="${t}" ${S.tab === t ? 'aria-current="page"' : ''}>${t === 'scan' ? `<span class="bub">${ic(i)}</span>` : ic(i)}<span>${l}</span>${t === 'alerts' && S.unread ? `<span class="dot">${S.unread > 99 ? '99+' : S.unread}</span>` : ''}</button>`).join('')}</div></nav>`;
 }
 const crumbs = (list) => list.map((c, i) => i === list.length - 1 ? `<span class="here">${esc(c.label)}</span>` : `<button data-act="${c.act}" ${Object.entries(c.data || {}).map(([k, v]) => `data-${k}="${esc(v)}"`).join(' ')}>${esc(c.label)}</button><span class="sep">›</span>`).join('');
@@ -1373,13 +1591,14 @@ VIEW['items.browse'] = r => {
       const mine = myItems(d.mine);
       pane = `${installPromo()}<div class="stats">
           <button class="stile ${lows.length ? 'crit' : ''}" data-act="jump" data-to="sec-low"><span class="k">${ic('warn')}재고 부족</span><span class="v">${lows.length}<small>품목</small></span></button>
-          <button class="stile" data-act="jump" data-to="sec-recent"><span class="k">${ic('move')}오늘 입출고</span><span class="v">${d.today ?? '–'}<small>건</small></span></button>
+          <button class="stile" data-act="history"><span class="k">${ic('move')}오늘 입출고</span><span class="v">${d.today ?? '–'}<small>건</small></span></button>
           <div class="stile"><span class="k">${ic('box')}등록 품목</span><span class="v">${S.cache.items.length}<small>종</small></span></div></div>
+        <div class="quicklinks"><button data-act="history">${ic('history')}<span>입출고 기록</span></button><button data-act="sites">${ic('pin')}<span>현장별 이력</span></button>${can(S.user, 'item') ? `<button data-act="order">${ic('list')}<span>발주·입고</span></button>` : ''}</div>
         ${mine.length ? `<section class="sec"><div class="sec-h"><h2>내가 자주 쓰는 품목</h2></div><div class="quick">${mine.map(it => `<button class="qitem" data-act="item" data-id="${it.id}"><span class="t">${esc(itemTitle(it))}</span><span class="qty ${isLow(it) ? 'low' : ''}">${total(it.id)}<small>${esc(it.unit)}</small></span></button>`).join('')}</div></section>` : ''}
         ${tools}
-        ${lows.length ? `<section class="sec" id="sec-low"><div class="sec-h"><h2>재고 부족</h2><button class="btn sm" data-act="shareLow">${ic('share')}목록 보내기</button></div>${itemList(lows, it => total(it.id))}</section>` : ''}
+        ${lows.length ? `<section class="sec" id="sec-low"><div class="sec-h"><h2>재고 부족</h2><span class="grow"></span>${can(S.user, 'item') ? `<button class="btn sm" data-act="order">${ic('list')}발주 목록</button>` : ''}<button class="btn sm" data-act="shareLow">${ic('share')}목록 보내기</button></div>${itemList(lows, it => total(it.id))}</section>` : ''}
         <section class="sec"><div class="sec-h"><h2>보관 위치</h2></div><div class="ledger">${(S.ix.locKids.get(null) || []).map(l => locRow(l)).join('') || empty('pin', '등록된 위치가 없습니다.', can(S.user, 'location') ? '더보기 › 위치 관리에서 구역을 추가하세요.' : '')}</div></section>
-        <section class="sec" id="sec-recent"><div class="sec-h"><h2>최근 입출고</h2><button class="btn sm ghost" data-act="history">${ic('history')}전체 기록·찾기</button></div><div class="ledger hist">${d.tx ? (tx.length ? tx.map(t => txRow(t, true)).join('') : empty('list', '아직 입출고 기록이 없습니다.')) : loadingBox()}</div></section>`;
+        <section class="sec" id="sec-recent"><div class="sec-h"><h2>최근 입출고</h2><button class="btn sm ghost" data-act="history">${ic('history')}전체 기록</button></div><div class="ledger hist">${d.tx ? (tx.length ? tx.map(t => txRow(t, true)).join('') : empty('list', '아직 입출고 기록이 없습니다.')) : loadingBox()}</div></section>`;
     } else {
       const l = S.ix.loc.get(node); if (!l) return { title: '위치 없음', body: empty('pin', '지워진 위치입니다.') };
       const path = pathOf(S.ix.loc, node);
@@ -1392,7 +1611,8 @@ VIEW['items.browse'] = r => {
       pane = `<section class="hero" style="flex-direction:row;gap:14px;align-items:center">
           <div class="photo" style="width:68px;height:68px">${l.photo ? `<img src="${esc(l.photo)}" alt="">` : ic('shelf')}</div>
           <div style="flex:1;min-width:0;display:flex;flex-direction:column;gap:6px">${l.code ? `<span class="tape lg" style="align-self:flex-start">${esc(l.code)}</span>` : ''}<span class="muted" style="font-size:13.5px">${esc(locPathText(node))}</span></div>
-          <button class="btn sm" data-act="labelsFor" data-id="${l.id}">${ic('qr')}라벨</button></section>
+          <div class="herobtns"><button class="btn sm" data-act="labelsFor" data-id="${l.id}">${ic('qr')}라벨</button>${can(S.user, 'adjust') ? `<button class="btn sm" data-act="countOpen" data-id="${l.id}" data-write>${ic('check')}실사</button>` : ''}</div></section>
+        ${can(S.user, 'adjust') && countChanges(node).out.length ? `<button class="notice warn" data-act="countOpen" data-id="${l.id}" style="border:0;text-align:left;width:100%;cursor:pointer">${ic('warn')}<span>실사하던 수량 <b>${countChanges(node).out.length}개</b>가 아직 저장되지 않았습니다. 눌러서 이어서 하세요.</span></button>` : ''}
         ${kids.length ? `<section class="sec"><div class="sec-h"><h2>안쪽 위치</h2></div><div class="ledger">${kids.map(k => locRow(k)).join('')}</div></section>` : ''}
         <section class="sec"><div class="sec-h"><h2>이 위치의 자재</h2><button class="btn sm" data-act="inHere" data-id="${l.id}" data-write>${ic('in')}여기에 입고</button></div>
         ${here.length ? itemList(here.map(x => x.it), it => qmap.get(it.id), null, node) : `<div class="ledger">${empty('box', '이 위치에 등록된 자재가 없습니다.', kids.length ? '안쪽 위치를 열어 보세요.' : '「여기에 입고」로 자재를 넣을 수 있습니다.')}</div>`}</section>`;
@@ -1423,7 +1643,7 @@ function histRows(list) {
     if (!q) return true;
     const it = S.ix.item.get(t.item_id);
     const hay = [it && it.name, it && it.spec, it && it.maker, t.site, t.note, personName(t.user_id), t.from_loc && locCode(t.from_loc), t.to_loc && locCode(t.to_loc), t.from_loc && locPathText(t.from_loc), t.to_loc && locPathText(t.to_loc)].join(' ').toLowerCase();
-    return q.split(/\s+/).every(w => hay.includes(w));
+    return q.split(/\s+/).every(w => kmatch(hay, w));
   });
 }
 const monthLabel = m => { const [y, mm] = m.split('-'); return `${y}년 ${+mm}월`; };
@@ -1444,8 +1664,85 @@ VIEW['items.history'] = r => {
     ${searchBox('q-hist', S.histQ || '', '현장·품명·사람·메모로 찾기 (예: 한빛)', '기록 검색')}
     <div class="filters" role="group" aria-label="종류">${HIST_KINDS.map(([k, l]) => `<button class="fchip" data-act="histKind" data-k="${k}" aria-pressed="${(S.histKind || '') === k}">${l}</button>`).join('')}</div>
     <div id="pane" class="pane">${pane}</div>`;
-  const actions = can(S.user, 'audit') ? `<button class="btn sm" data-act="histExport">${ic('download')}엑셀</button>` : '';
+  const actions = `<button class="btn sm" data-act="sites">${ic('pin')}현장별</button>` + (can(S.user, 'audit') ? `<button class="btn sm" data-act="histExport">${ic('download')}엑셀</button>` : '');
   return { title: '입출고 기록', crumbs: crumbs([{ label: '자재', act: 'locRoot' }, { label: '입출고 기록' }]), body, pane, actions };
+};
+
+/* 현장별 사용 이력 — 최근 1년 출고를 현장 이름으로 묶는다 */
+VIEW['items.sites'] = () => {
+  const list = vd().list; let pane;
+  if (!list) pane = `<div class="ledger">${loadingBox('pin')}</div>`;
+  else {
+    const g = new Map();
+    list.forEach(t => { if (t.type !== 'out' || t.canceled_by) return; const nm = parseSite(t.site).name || t.site; const x = g.get(nm) || { n: 0, last: t.created_at, hos: new Set() }; x.n++; if (t.created_at > x.last) x.last = t.created_at; const h = siteHo(parseSite(t.site)); if (h) x.hos.add(h); g.set(nm, x); });
+    const q = (S.sitesQ || '').trim();
+    const rows = [...g].filter(([nm]) => smatch(nm, q)).sort((a, b) => b[1].last.localeCompare(a[1].last));
+    pane = `<div class="ledger">${rows.map(([nm, x]) => `<button class="lrow" data-act="site" data-v="${esc(nm)}"><span class="ic">${ic('pin')}</span><div class="main"><span class="t">${esc(nm)}</span><span class="s">출고 ${x.n}건 · 마지막 ${fmtWhen(x.last)}${x.hos.size ? ' · ' + esc([...x.hos].slice(0, 3).join(', ')) + (x.hos.size > 3 ? ` 외 ${x.hos.size - 3}` : '') : ''}</span></div><span class="chev">${ic('chev')}</span></button>`).join('') || empty('pin', q ? '찾는 현장이 없습니다.' : '최근 1년 동안 현장을 적은 출고가 없습니다.', q ? '초성으로도 찾을 수 있습니다 (예: ㅎㅂ).' : '출고할 때 「현장」 칸을 적으면 여기에 모입니다.')}</div>`;
+  }
+  const body = searchBox('q-sites', S.sitesQ || '', '현장 이름 찾기 (예: 한빛, ㅎㅂ)', '현장 검색') + `<div id="pane" class="pane">${pane}</div>`;
+  return { title: '현장별', crumbs: crumbs([{ label: '자재', act: 'locRoot' }, { label: '현장별' }]), body, pane };
+};
+VIEW['items.site'] = r => {
+  const list = vd().list;
+  const body = (() => {
+    if (!list) return `<div class="ledger">${loadingBox('pin')}</div>`;
+    const hos = [...new Set(list.map(t => siteHo(parseSite(t.site))).filter(Boolean))].sort((a, b) => a.localeCompare(b, 'ko', { numeric: true }));
+    const sel = S.siteHo || '';
+    const rows = list.filter(t => !sel || siteHo(parseSite(t.site)) === sel);
+    const outs = rows.filter(t => t.type === 'out' && !t.canceled_by);
+    const sum = new Map(); outs.forEach(t => sum.set(t.item_id, (sum.get(t.item_id) || 0) + t.qty));
+    const top = [...sum].sort((a, b) => b[1] - a[1]);
+    let h = '', day = '';
+    rows.forEach(t => { const d = toDate(t.created_at); const dl = d.getFullYear() + '년 ' + (d.getMonth() + 1) + '월 ' + d.getDate() + '일'; if (dl !== day) { day = dl; h += `<div class="group-h"><span>${dl}</span></div>`; } h += txRow(t, true); });
+    return `${hos.length ? `<div class="filters" role="group" aria-label="동·호기">${[['', '전체'], ...hos.map(x => [x, x])].map(([v, l]) => `<button class="fchip" data-act="siteHo" data-v="${esc(v)}" aria-pressed="${sel === v}">${esc(l)}</button>`).join('')}</div>` : ''}
+      <div class="stats"><div class="stile"><span class="k">${ic('out')}출고</span><span class="v">${outs.length}<small>건</small></span></div><div class="stile"><span class="k">${ic('box')}자재 종류</span><span class="v">${sum.size}<small>가지</small></span></div><div class="stile"><span class="k">${ic('clock')}처음 기록</span><span class="v sm">${rows.length ? (d => (d.getFullYear() % 100) + '.' + (d.getMonth() + 1) + '.' + d.getDate())(toDate(rows[rows.length - 1].created_at)) : '–'}</span></div></div>
+      ${top.length ? `<section class="sec"><div class="sec-h"><h2>이 현장에 쓴 자재</h2><span class="aside">취소한 것은 빼고</span></div><div class="ledger">${top.map(([id, q]) => { const it = S.ix.item.get(id); return `<button class="lrow" data-act="item" data-id="${id}"><div class="main"><span class="t">${esc(itemTitle(it))}</span><span class="s">${outs.filter(t => t.item_id === id).length}번 출고</span></div><span class="qty">${q}<small>${esc(it ? it.unit : '')}</small></span><span class="chev">${ic('chev')}</span></button>`; }).join('')}</div></section>` : ''}
+      <section class="sec"><div class="sec-h"><h2>기록</h2><span class="aside">${rows.length}건</span></div><div class="ledger hist">${h || empty('list', '기록이 없습니다.')}</div></section>`;
+  })();
+  return { title: r.name, crumbs: crumbs([{ label: '자재', act: 'locRoot' }, { label: '현장별', act: 'sites' }, { label: r.name }]), body };
+};
+
+/* 재고 실사: 선반에 실제로 있는 수량을 차례로 적고 한 번에 저장 */
+function countAddList() {
+  const q = (S.cntQ || '').trim(); if (!q) return '';
+  const have = new Set(countIds(route().node));
+  const list = S.cache.items.filter(i => !have.has(i.id) && smatch([i.name, i.spec, i.maker, i.models].join(' '), q)).slice(0, 20);
+  return `<div class="ledger">${list.map(i => `<button class="lrow" data-act="cntAdd" data-id="${i.id}"><span class="ic">${ic('plus')}</span><div class="main"><span class="t">${esc(itemTitle(i))}</span><span class="s">${esc(i.maker || '')} · 전체 ${total(i.id)}${esc(i.unit)}</span></div></button>`).join('') || empty('search', '찾는 품목이 없습니다.', '아래 「새 품목 등록」으로 바로 만들 수 있습니다.')}</div>`;
+}
+VIEW['items.count'] = r => {
+  const l = S.ix.loc.get(r.node); if (!l) return { title: '실사', body: empty('pin', '지워진 위치입니다.') };
+  if (!can(S.user, 'adjust')) return { title: '실사', body: empty('info', '재고 실사는 관리자만 할 수 있습니다.') };
+  const c = countState(r.node); const ids = countIds(r.node); const { out } = countChanges(r.node);
+  const rows = ids.map(id => { const it = S.ix.item.get(id); const cur = qtyAt(id, r.node); const v = c.vals[id] ?? ''; const ch = isInt(v) && +v !== cur;
+    return `<div class="crow ${ch ? 'chg' : ''} ${String(v).trim() !== '' && !isInt(v) ? 'bad' : ''}"><div class="main"><span class="t">${esc(itemTitle(it))}</span><span class="s was">${ch ? `기록 ${cur} → ${+v}` : `기록 ${cur}`}</span></div>
+      <div class="ministep big"><button type="button" data-act="cntStep" data-id="${id}" data-d="-1" aria-label="하나 빼기">−</button><input id="cnt-${id}" data-cnt="${id}" data-nokeep inputmode="numeric" value="${esc(v)}" placeholder="${cur}" aria-label="${esc(itemTitle(it))} 실제 수량" autocomplete="off"><button type="button" data-act="cntStep" data-id="${id}" data-d="1" aria-label="하나 더하기">+</button></div><span class="unit">${esc(it.unit)}</span></div>`; }).join('');
+  const body = `<section class="hero" style="flex-direction:row;gap:12px;align-items:center">${l.code ? `<span class="tape lg">${esc(l.code)}</span>` : ''}<span class="muted" style="font-size:13.5px;flex:1;min-width:0">${esc(locPathText(l.id))}</span></section>
+    <div class="notice">${ic('info')}<span>선반에 <b>실제로 있는 수량</b>을 세어 적으세요. 비워 둔 칸은 그대로 두고, 바뀐 품목만 「수량 정정(실사)」으로 저장됩니다. 적던 수량은 저장 전까지 이 폰에 남아 있습니다.</span></div>
+    <section class="sec"><div class="sec-h"><h2>이 위치의 품목</h2><span class="aside">${ids.length}가지</span></div><div class="ledger countlist">${rows || empty('box', '이 위치에 등록된 품목이 없습니다.', '아래에서 품목을 찾아 넣으세요.')}</div></section>
+    <section class="sec"><div class="sec-h"><h2>다른 품목 넣기</h2><button class="btn sm" data-act="cntNewItem" data-write>${ic('plus')}새 품목 등록</button></div>
+      ${searchBox('q-cnt', S.cntQ || '', '품명·규격 검색 (초성도 됨)', '넣을 품목 검색')}<div id="cnt-add">${countAddList()}</div></section>`;
+  const bar = `<div class="countbar"><button class="btn ghost" data-act="cntReset" ${Object.keys(c.vals).length || c.added.length ? '' : 'disabled'}>처음대로</button><span id="cnt-sum" class="grow">${out.length ? `바뀐 품목 ${out.length}개` : '바뀐 품목 없음'}</span><button id="cnt-save" class="btn primary" data-act="cntSave" data-write ${out.length && !S.busy ? '' : 'disabled'}>저장</button></div>`;
+  return { title: '실사 · ' + l.name, crumbs: crumbs([{ label: '자재', act: 'locRoot' }, ...pathOf(S.ix.loc, l.id).map(p => ({ label: p.name, act: 'loc', data: { id: p.id } })), { label: '실사' }]), body, bar, actions: `<button class="btn sm" data-act="cntNext">${ic('scan')}다음 선반</button>` };
+};
+
+/* 발주 목록: 재고 부족 품목을 최소 재고까지 채우는 수량으로 미리 채워 둔다 */
+function orderAddList() {
+  const q = (S.ordQ || '').trim(); if (!q) return '';
+  const have = new Set(orderRows().map(r => r.id));
+  const list = S.cache.items.filter(i => !have.has(i.id) && smatch([i.name, i.spec, i.maker, i.models].join(' '), q)).slice(0, 20);
+  return `<div class="ledger">${list.map(i => `<button class="lrow" data-act="ordAdd" data-id="${i.id}"><span class="ic">${ic('plus')}</span><div class="main"><span class="t">${esc(itemTitle(i))}</span><span class="s">${esc(i.maker || '제조사 미정')} · 지금 ${total(i.id)}${esc(i.unit)}</span></div></button>`).join('') || empty('search', '찾는 품목이 없습니다.')}</div>`;
+}
+VIEW['items.order'] = () => {
+  if (!S.order) orderInit();
+  const rows = orderRows(); const groups = new Map();
+  rows.forEach(r => { const it = S.ix.item.get(r.id); const k = it.maker || '제조사 미정'; if (!groups.has(k)) groups.set(k, []); groups.get(k).push(r); });
+  const on = rows.filter(r => r.on && r.qty > 0).length;
+  const body = `<div class="notice">${ic('info')}<span>재고 부족 품목을 <b>최소 재고까지 채우는 수량</b>으로 미리 적어 두었습니다. 수량을 고치거나 체크를 빼고 「보내기」를 누르면 제조사별로 묶은 글이 카톡·문자로 보내집니다. 자재가 들어오면 <b>「한 번에 입고」</b>로 체크한 품목을 한꺼번에 넣으세요. (지금 ${on}품목 체크)</span></div>
+    ${[...groups].map(([k, rs]) => `<section class="sec"><div class="sec-h"><h2>${esc(k)}</h2><span class="aside">${rs.length}품목</span></div><div class="ledger">${rs.map(r => { const it = S.ix.item.get(r.id); return `<label class="crow ${r.on ? '' : 'off'}"><input type="checkbox" data-act="ordToggle" data-id="${r.id}" ${r.on ? 'checked' : ''} aria-label="포함"><div class="main"><span class="t">${esc(itemTitle(it))}</span><span class="s">지금 ${total(it.id)} · 최소 ${it.min_qty}${esc(it.unit)}${r.low ? '' : ' · 직접 넣음'}</span></div>
+      <div class="ministep"><button type="button" data-act="ordStep" data-id="${r.id}" data-d="-1" aria-label="하나 빼기">−</button><output>${r.qty}</output><button type="button" data-act="ordStep" data-id="${r.id}" data-d="1" aria-label="하나 더하기">+</button></div>${r.low ? '' : `<button type="button" class="iconbtn" data-act="ordDel" data-id="${r.id}" aria-label="빼기">${ic('x')}</button>`}</label>`; }).join('')}</div></section>`).join('') || `<div class="ledger">${empty('check', '재고가 부족한 품목이 없습니다.', '아래에서 발주할 품목을 직접 찾아 넣을 수 있습니다.')}</div>`}
+    <section class="sec"><div class="sec-h"><h2>다른 품목 넣기</h2></div>${searchBox('q-ord', S.ordQ || '', '품명·규격 검색 (초성도 됨)', '발주할 품목 검색')}<div id="ord-add">${orderAddList()}</div></section>`;
+  const bar = `<div class="countbar ordbar"><button class="btn ghost" data-act="ordCsv" aria-label="엑셀로 받기">${ic('download')}엑셀</button><button class="btn" data-act="ordShare">${ic('share')}보내기</button><button class="btn in" data-act="ordIn" data-write>${ic('in')}한 번에 입고</button></div>`;
+  return { title: '발주·입고', crumbs: crumbs([{ label: '자재', act: 'locRoot' }, { label: '발주·입고' }]), body, bar, actions: `<button class="btn sm" data-act="ordReset">다시 채우기</button>` };
 };
 
 function txRow(t, withItem = false) {
@@ -1457,7 +1754,7 @@ function txRow(t, withItem = false) {
   return `<div class="hrow ${t.canceled_by ? 'void' : ''}" ${withItem && it ? `data-act="item" data-id="${t.item_id}" role="button" tabindex="0" style="cursor:pointer"` : ''}>
     <span class="kind ${kcls}">${TX_NAME[t.type]}</span>
     <div class="d">${withItem ? `<div style="font-weight:600">${esc(itemTitle(it))}</div>` : ''}<span class="who">${esc(personName(t.user_id))}</span> <span class="meta">${fmtWhen(t.created_at)}</span>
-      <div class="meta"><span class="mono">${esc(where)}</span>${t.site ? ' · ' + esc(t.site) : ''}${t.note ? ' · ' + esc(t.note) : ''}${t.canceled_by ? ' · 취소됨' : ''}</div></div>
+      <div class="meta"><span class="mono">${esc(where)}</span>${t.site ? ` · <button class="sitelink" data-act="site" data-v="${esc(parseSite(t.site).name || t.site)}">${esc(t.site)}</button>` : ''}${t.note ? ' · ' + esc(t.note) : ''}${t.canceled_by ? ' · 취소됨' : ''}</div></div>
     <span class="n">${sign}${Math.abs(t.qty)}${esc(unit)}</span>
     ${canC ? `<div class="ops"><button class="btn sm" data-act="cancelTx" data-id="${t.id}" data-write>${ic('undo')}${t.type === 'out' ? '출고 취소 (안 씀)' : TX_NAME[t.type] + ' 취소'}</button></div>` : ''}
   </div>`;
@@ -1515,39 +1812,66 @@ VIEW['docs.browse'] = r => {
       ${fid ? `<section class="sec"><div class="sec-h"><h2>파일</h2><span class="aside">${docs.length ? docs.length + '개 · 최근 올린 순' : ''}</span></div><div class="ledger">${docs.length ? docs.map(d => docRow(d)).join('') : empty('docs', '아직 파일이 없습니다.', '아래 「올리기」로 PDF·엑셀·사진 등을 그대로 올리세요.')}</div></section>` : ''}
       ${!fid ? `<p class="muted" style="font-size:12.5px;margin:0">자료는 회사용 구글 드라이브에 저장되고, 앱 폴더와 같은 모양으로 정리됩니다.</p>` : ''}`;
     if (!fid) {
-      const fv = [...favs()].map(id => S.ix.doc.get(id)).filter(Boolean);
-      const rc = recentDocs().map(id => S.ix.doc.get(id)).filter(d => d && !fv.includes(d)).slice(0, 5);
-      pane = (fv.length ? `<section class="sec"><div class="sec-h"><h2>즐겨찾기</h2><span class="aside">${fv.length}개</span></div><div class="ledger">${fv.map(d => docRow(d, true)).join('')}</div></section>` : '')
-        + (rc.length ? `<section class="sec"><div class="sec-h"><h2>최근 본 자료</h2></div><div class="ledger">${rc.map(d => docRow(d, true)).join('')}</div></section>` : '')
-        + pane;
+      const rc = recentDocs().map(id => S.ix.doc.get(id)).filter(Boolean).slice(0, 5);
+      pane = (rc.length ? `<section class="sec"><div class="sec-h"><h2>최근 본 자료</h2></div><div class="ledger">${rc.map(d => docRow(d, true)).join('')}</div></section>` : '') + pane;
     }
   }
   const cr = f && !q ? crumbs([{ label: '자료', act: 'folder', data: { id: '' } }, ...pathOf(S.ix.folder, fid).map(p => ({ label: p.name, act: 'folder', data: { id: p.id } }))]) : null;
   const fab = fid ? `<button class="fab" data-act="upload" data-write>${ic('upload')}올리기</button>` : '';
-  const body = searchBox('q-docs', S.docsQ, '파일 이름·내용 검색 (예: E-15)', '자료 검색') + `<div id="pane" class="pane">${pane}</div>`;
+  const body = (fid ? '' : docSeg('all')) + searchBox('q-docs', S.docsQ, '파일 이름·내용 검색 (예: E-15)', '자료 검색') + `<div id="pane" class="pane">${pane}</div>`;
   return { title: f ? f.name : '자료', crumbs: cr, body, pane, fab };
+};
+const docSeg = m => `<div class="seg block docseg" role="group" aria-label="자료 보기"><button data-act="docsMode" data-m="all" aria-pressed="${m === 'all'}">${ic('docs')}모든 자료</button><button data-act="docsMode" data-m="mine" aria-pressed="${m === 'mine'}">${ic('starOn')}내 저장함 <b>${myIds().length}</b></button></div>`;
+/* 내 저장함: ☆ 누른 자료가 모이고 폰에도 저장된다. 폴더는 내 마음대로 (이 휴대폰에만) */
+function myDocRow(d) {
+  const [k, lab] = fileKind(d.name, d.kind); const off = offInfo(d.id); const busy = S.offBusy && S.offBusy[d.id] != null;
+  const st = off ? `<span class="chip ok offchip">${ic('phone')}폰 저장 · ${fmtSize(off.size)}</span>` : busy ? `<span class="chip">저장 중 ${Math.round((S.offBusy[d.id] || 0) * 100)}%</span>` : d.kind === 'file' ? `<span class="chip warn">폰에 없음</span>` : `<span class="chip">링크</span>`;
+  return `<div class="lrow irow"><button class="hit" data-act="doc" data-id="${d.id}"><span class="ftype ft-${k}">${lab}</span><div class="main"><span class="t">${esc(d.name)}</span><span class="s">${st} ${esc(folderPathText(d.folder_id))}</span></div></button><button class="iconbtn" data-act="myDocMenu" data-id="${d.id}" aria-label="옮기기·빼기">${ic('dots')}</button></div>`;
+}
+VIEW['docs.mine'] = r => {
+  const md = myData(); const fid = r.folder && md.folders.some(x => x.id === r.folder) ? r.folder : null;
+  const f = fid ? md.folders.find(x => x.id === fid) : null;
+  const kids = myKids(md, fid); const docs = myDocsIn(md, fid);
+  const all = myIds(); const notSaved = all.filter(id => { const d = S.ix.doc.get(id); return d && d.kind === 'file' && !offInfo(id) && !(S.offBusy && S.offBusy[id] != null); });
+  const cr = f ? crumbs([{ label: '내 저장함', act: 'myOpen', data: { id: '' } }, ...myPath(md, fid).map(p => ({ label: p.name, act: 'myOpen', data: { id: p.id } }))]) : null;
+  const body = `${f ? '' : docSeg('mine')}
+    ${!all.length ? `<div class="notice">${ic('info')}<span>자료를 열고 오른쪽 위 <b>☆</b>를 누르면 여기에 모이고 <b>폰에도 저장</b>됩니다. 전파가 약한 기계실·피트에서도 열립니다. 폴더를 만들어 내 마음대로 정리하세요. (이 휴대폰에만 저장)</span></div>` : ''}
+    ${notSaved.length && online() ? `<div class="notice warn">${ic('warn')}<span>아직 폰에 없는 자료가 ${notSaved.length}개 있습니다.</span><button class="btn sm" data-act="mySaveAll">모두 폰에 저장</button></div>` : ''}
+    <div class="toolbar"><button class="btn sm" data-act="myMkdir">${ic('folderPlus')}폴더 만들기</button>${f ? `<span class="grow"></span><button class="btn sm ghost" data-act="myRename" data-id="${f.id}">${ic('edit')}이름 바꾸기</button><button class="btn sm ghost danger" data-act="myDelFolder" data-id="${f.id}">${ic('trash')}폴더 지우기</button>` : ''}</div>
+    ${kids.length ? `<section class="sec"><div class="sec-h"><h2>내 폴더</h2></div><div class="ledger">${kids.map(k => { const n = myDocsIn(md, k.id).length, m = myKids(md, k.id).length;
+      return `<button class="lrow" data-act="myOpen" data-id="${k.id}"><span class="folder-ic mine">${ic('folder')}</span><div class="main"><span class="t">${esc(k.name)}</span><span class="s">${[m ? '폴더 ' + m : '', n ? '자료 ' + n : ''].filter(Boolean).join(' · ') || '비어 있음'}</span></div><span class="chev">${ic('chev')}</span></button>`; }).join('')}</div></section>` : ''}
+    <section class="sec"><div class="sec-h"><h2>${f ? '이 폴더의 자료' : kids.length ? '폴더에 넣지 않은 자료' : '저장한 자료'}</h2><span class="aside">${docs.length ? docs.length + '개' : ''}</span></div>
+      <div class="ledger">${docs.map(d => myDocRow(d)).join('') || empty('docs', f ? '이 폴더는 비어 있습니다.' : all.length ? '모두 폴더에 들어 있습니다.' : '아직 저장한 자료가 없습니다.', f ? '자료 옆 「⋯」 › 「폴더로 옮기기」로 넣으세요.' : '')}</div></section>
+    ${all.length ? `<p class="muted" style="font-size:12.5px;margin:0">폰에 저장한 파일 ${Object.keys(offList()).length}개 · ${fmtSize(offTotal())}. PDF·사진은 앱 안에서 바로 열리고, 엑셀·한글 같은 파일은 「파일 열기」로 휴대폰 앱에서 엽니다.</p>` : ''}`;
+  return { title: f ? f.name : '자료', crumbs: cr, body };
 };
 function docRow(d, showPath = false, inside = false) {
   const [k, lab] = fileKind(d.name, d.kind);
-  return `<button class="lrow" data-act="doc" data-id="${d.id}"><span class="ftype ft-${k}">${lab}</span><div class="main"><span class="t">${esc(d.name)}</span>
+  return `<button class="lrow" data-act="doc" data-id="${d.id}"><span class="ftype ft-${k}">${lab}</span><div class="main"><span class="t">${esc(d.name)}${offInfo(d.id) ? ` <span class="chip ok offchip">${ic('phone')}폰 저장</span>` : ''}</span>
     <span class="s">${showPath ? esc(folderPathText(d.folder_id)) + ' · ' : ''}${d.size ? fmtSize(d.size) + ' · ' : ''}${esc(personName(d.uploaded_by))} · ${fmtWhen(d.created_at)}${inside ? ' · <b>파일 안에서 찾음</b>' : ''}</span></div><span class="chev">${ic('chev')}</span></button>`;
 }
 VIEW['docs.doc'] = r => {
   const d = S.ix.doc.get(r.id);
   if (!d) return { title: '자료', body: empty('docs', '지워졌거나 없는 파일입니다.') };
   const [k, lab] = fileKind(d.name, d.kind); const v = vd(); const adm = can(S.user, 'docAdmin');
-  let viewer;
-  if (d.kind === 'video' || d.kind === 'link') viewer = `<div class="viewer-page" style="aspect-ratio:16/9">${ic(d.kind === 'video' ? 'play' : 'link')}<div>${d.kind === 'video' ? '유튜브 영상' : '바깥 링크'}</div><a class="btn primary" href="${esc(d.url)}" target="_blank" rel="noopener">${d.kind === 'video' ? '유튜브에서 재생' : '링크 열기'}</a></div>`;
+  let viewer; const off = offInfo(d.id); const busy = S.offBusy && S.offBusy[d.id] != null;
+  if (off && offView(d) && !(S.driveView && S.driveView[d.id] && online())) viewer = `<div id="offview" data-id="${d.id}"></div>`;
+  else if (d.kind === 'video' || d.kind === 'link') viewer = `<div class="viewer-page" style="aspect-ratio:16/9">${ic(d.kind === 'video' ? 'play' : 'link')}<div>${d.kind === 'video' ? '유튜브 영상' : '바깥 링크'}</div><a class="btn primary" href="${esc(d.url)}" target="_blank" rel="noopener">${d.kind === 'video' ? '유튜브에서 재생' : '링크 열기'}</a></div>`;
   else if (!DEMO && d.drive_id && online()) viewer = `<iframe src="https://drive.google.com/file/d/${esc(d.drive_id)}/preview" style="width:100%;aspect-ratio:1/1.3;border:0;display:block" allow="autoplay" title="${esc(d.name)}"></iframe>`;
   else if (v.data) viewer = `<img src="${v.data}" alt="${esc(d.name)}" style="display:block;width:100%">`;
-  else viewer = `<div class="viewer-page"><span class="ftype ft-${k}">${lab}</span><div><b style="color:var(--ink)">${esc(d.name)}</b></div><div>${DEMO ? '체험판에서는 파일 내용을 보여 드릴 수 없습니다.<br>실제 앱에서는 이 자리에 파일이 바로 열립니다.' : '오프라인이라 파일을 열 수 없습니다.<br>연결되면 이 자리에 파일이 열립니다.'}</div></div>`;
-  const body = `<div class="viewer">${viewer}</div>
+  else if (off) viewer = `<div class="viewer-page"><span class="ftype ft-${k}">${lab}</span><div><b style="color:var(--ink)">${esc(d.name)}</b></div><div>폰에 저장된 파일입니다. 전파가 없어도<br>「파일 열기」를 누르면 휴대폰 앱(엑셀·한글 등)으로 엽니다.</div><button class="btn primary" data-act="docDownload" data-id="${d.id}">${ic('download')}파일 열기</button></div>`;
+  else viewer = `<div class="viewer-page"><span class="ftype ft-${k}">${lab}</span><div><b style="color:var(--ink)">${esc(d.name)}</b></div><div>${DEMO ? '체험판에서는 드라이브 미리보기가 열리지 않습니다.<br>☆ 를 누르면 내 저장함에 넣고 폰에 저장된 예시 파일로 보기를 해 볼 수 있습니다.' : '오프라인이라 파일을 열 수 없습니다.<br>☆ 로 「내 저장함」에 넣어 둔 자료는 폰에 저장돼 전파가 없어도 열립니다.'}</div></div>`;
+  const md = myData(); const where = favs().has(d.id) ? '내 저장함' + myPath(md, myPlace(md, d.id)).map(x => ' › ' + esc(x.name)).join('') : '';
+  const offbar = off ? `<div class="offbar ok">${ic('phone')}<span>${where} · 폰에 저장됨 ${fmtSize(off.size)} · ${offView(d) ? '전파가 없어도 열립니다' : '전파가 없어도 「파일 열기」로 엽니다'}</span><button class="linkbtn" data-act="myDocMenu" data-id="${d.id}">폴더로 옮기기</button>${offView(d) && online() && d.drive_id && !DEMO ? `<button class="linkbtn" data-act="driveView" data-id="${d.id}">${S.driveView && S.driveView[d.id] ? '저장본으로 보기' : '드라이브에서 보기'}</button>` : ''}</div>`
+    : busy ? `<div class="offbar">${ic('download')}<span>폰에 저장하는 중 ${Math.round((S.offBusy[d.id] || 0) * 100)}%</span></div>`
+    : offOK(d) ? `<div class="offbar">${ic('phone')}<span>${favs().has(d.id) ? where + '에 있지만 아직 폰에 없습니다.' : '☆를 누르면 「내 저장함」에 모이고 폰에도 저장돼, 전파 없는 곳에서도 열립니다.'}</span><button class="btn sm" data-act="offSave" data-id="${d.id}">${ic('download')}${favs().has(d.id) ? '폰에 저장' : '내 저장함에 넣기'}</button></div>` : '';
+  const body = `<div class="viewer">${viewer}</div>${offbar}
     <section class="hero" style="gap:12px"><dl class="kv">${d.size ? `<dt>크기</dt><dd>${fmtSize(d.size)}</dd>` : ''}<dt>올린 사람</dt><dd>${esc(personName(d.uploaded_by))}</dd><dt>올린 날</dt><dd>${fmtWhen(d.created_at)}</dd><dt>폴더</dt><dd>${esc(folderPathText(d.folder_id))}</dd>${d.store_no ? `<dt>저장소</dt><dd>${esc(d.store_no)}호</dd>` : ''}</dl>
-      <div class="toolbar">${!DEMO && d.drive_id ? `<a class="btn sm" href="https://drive.google.com/file/d/${esc(d.drive_id)}/view" target="_blank" rel="noopener">${ic('eye')}크게 보기</a>` : ''}${adm ? `<button class="btn sm" data-act="docRename" data-id="${d.id}" data-write>${ic('edit')}이름 변경</button><button class="btn sm" data-act="docMove" data-id="${d.id}" data-write>${ic('move')}이동</button><button class="btn sm danger" data-act="docDelete" data-id="${d.id}" data-write>${ic('trash')}삭제</button>` : ''}</div></section>
+      <div class="toolbar">${!DEMO && d.drive_id ? `<a class="btn sm" href="https://drive.google.com/file/d/${esc(d.drive_id)}/view" target="_blank" rel="noopener">${ic('eye')}크게 보기</a>` : ''}${d.kind === 'file' ? `<button class="btn sm" data-act="docDownload" data-id="${d.id}">${ic('download')}파일 받기</button>` : ''}${adm ? `<button class="btn sm" data-act="docRename" data-id="${d.id}" data-write>${ic('edit')}이름 변경</button><button class="btn sm" data-act="docMove" data-id="${d.id}" data-write>${ic('move')}이동</button><button class="btn sm danger" data-act="docDelete" data-id="${d.id}" data-write>${ic('trash')}삭제</button>` : ''}</div></section>
     ${commentsBlock('doc', d.id, v.cm)}`;
   const cr = crumbs([{ label: '자료', act: 'folder', data: { id: '' } }, ...pathOf(S.ix.folder, d.folder_id).map(p => ({ label: p.name, act: 'folder', data: { id: p.id } })), { label: d.name }]);
   const on = favs().has(d.id);
-  const actions = `<button class="iconbtn fav ${on ? 'on' : ''}" data-act="fav" data-id="${d.id}" aria-label="${on ? '즐겨찾기 빼기' : '즐겨찾기'}" aria-pressed="${on}">${ic(on ? 'starOn' : 'star')}</button>`;
+  const actions = `<button class="iconbtn fav ${on ? 'on' : ''}" data-act="fav" data-id="${d.id}" aria-label="${on ? '내 저장함에서 빼기' : '내 저장함에 넣기'}" aria-pressed="${on}">${ic(on ? 'starOn' : 'star')}</button>`;
   return { title: d.name, crumbs: cr, body, actions };
 };
 
@@ -1585,6 +1909,8 @@ VIEW['more.menu'] = () => {
       ${row('go" data-v="places', 'shelf', '위치 관리 · QR 라벨', '캐비넷·선반 추가, 사진, 라벨 인쇄')}
       ${row('go" data-v="cats', 'tag', '분류 관리', '도어 부품, 전장 부품 같은 자재 분류')}
       ${row('go" data-v="bulk', 'paste', '품목 대량 등록', '엑셀에서 복사해 한 번에 넣기')}
+      ${row('stats', 'gauge', '사용 통계', '많이 나간 자재 · 현장별 사용량 · 최소 재고 추천')}
+      ${row('poster', 'docs', '직원 안내문 인쇄', '앱 주소 QR과 쓰는 법을 A4 한 장에')}
       ${row('go" data-v="trash', 'trash', '휴지통', '지운 뒤 30일 안에 되살리기')}
       ${row('go" data-v="guide', 'book', '관리자 안내', '문제가 생겼을 때 할 일')}
     </div></section>` : ''}
@@ -1598,6 +1924,7 @@ VIEW['more.menu'] = () => {
       <div class="themepick"><div class="seg block" role="group" aria-label="화면 모드">${[['auto', 'contrast', '자동'], ['light', 'sun', '밝게'], ['dark', 'moon', '어둡게']].map(([v, i, l]) => `<button data-act="theme" data-v="${v}" aria-pressed="${themeNow() === v}">${ic(i)}${l}</button>`).join('')}</div></div>
       <div class="lrow"><span class="ic">${ic('textsize')}</span><div class="main"><span class="t">글자 크기</span><span class="s">「크게」는 글자와 버튼을 모두 키웁니다. 이 기기에만 저장됩니다.</span></div></div>
       <div class="themepick"><div class="seg block" role="group" aria-label="글자 크기">${[['md', '보통'], ['lg', '크게']].map(([v, l]) => `<button data-act="size" data-v="${v}" aria-pressed="${sizeNow() === v}" ${v === 'lg' ? 'style="font-size:16px"' : ''}>가 ${l}</button>`).join('')}</div></div></div></section>
+    ${Object.keys(offList()).length ? `<section class="sec"><div class="sec-h"><h2>폰에 저장한 자료</h2><span class="aside">이 기기</span></div><div class="ledger"><div class="lrow"><span class="ic">${ic('phone')}</span><div class="main"><span class="t">${Object.keys(offList()).length}개 · ${fmtSize(offTotal())}</span><span class="s">☆ 로 「내 저장함」에 넣은 자료는 폰에 저장돼 전파가 없어도 열립니다</span></div><button class="btn sm" data-act="docsMode" data-m="mine">내 저장함</button><button class="btn sm ghost" data-act="offClear">모두 지우기</button></div></div></section>` : ''}
     <section class="sec"><div class="sec-h"><h2>알림 창 설정</h2><span class="aside">이 기기에만 저장</span></div><div class="ledger">
       ${[['done', 'check', '저장 완료 알림', '「출고했습니다」처럼 저장한 뒤 아래에 잠깐 뜨는 알림'], ['undo', 'undo', '되돌리기 버튼', '입고·출고·이동 직후 8초 동안 뜨는 「되돌리기」'], ['install', 'phone', '홈 화면 추가 안내', '자재 첫 화면 맨 위의 파란 상자']].map(([k, i, t, s]) => `<label class="lrow" style="cursor:pointer"><span class="ic">${ic(i)}</span><div class="main"><span class="t">${t}</span><span class="s">${s}</span></div><input type="checkbox" class="switch" data-act="pref" data-k="${k}" ${pref(k) ? 'checked' : ''} aria-label="${t}"></label>`).join('')}</div>
       <p class="muted" style="font-size:12.5px;margin:0">저장 실패·연결 끊김 같은 빨간 알림은 꺼도 항상 뜹니다.</p></section>
@@ -1662,7 +1989,7 @@ VIEW['more.status'] = () => {
 
 VIEW['more.places'] = () => {
   const rows = flatTree(S.ix.locKids);
-  const body = `<div class="toolbar"><button class="btn sm primary" data-act="locNew" data-write>${ic('plus')}구역 추가</button><button class="btn sm" data-act="go" data-v="labels">${ic('qr')}QR 라벨 만들기</button></div>
+  const body = `<div class="toolbar"><button class="btn sm primary" data-act="locBulk" data-write>${ic('plus')}한 번에 만들기</button><button class="btn sm" data-act="locNew" data-write>${ic('plus')}구역 하나 추가</button><button class="btn sm" data-act="go" data-v="labels">${ic('qr')}QR 라벨 만들기</button></div>
     <div class="ledger">${rows.map(({ n, depth }) => `<div class="lrow" style="padding-left:${14 + depth * 20}px"><span class="ic">${ic(n.kind === 'zone' ? 'pin' : 'shelf')}</span><div class="main"><span class="t">${esc(n.name)}</span>${n.code ? `<span class="s"><span class="tape">${esc(n.code)}</span></span>` : ''}</div>
       ${depth < 2 ? `<button class="btn sm ghost" data-act="locNew" data-parent="${n.id}" data-write aria-label="${esc(n.name)} 안에 추가">${ic('plus')}안에</button>` : ''}<button class="iconbtn" data-act="locEdit" data-id="${n.id}" data-write aria-label="수정">${ic('edit')}</button></div>`).join('')}</div>
     <p class="muted" style="font-size:12.5px;margin:0">구역(예: 창고) › 캐비넷·선반(예: 선반 3) › 칸(예: 하단) 세 단계까지 만들 수 있습니다. 코드는 라벨에 크게 찍히는 짧은 이름입니다.</p>`;
@@ -1678,7 +2005,8 @@ VIEW['more.labels'] = r => {
       ${rows.map(({ n, depth }) => `<label class="lrow" style="padding-left:${16 + depth * 20}px;cursor:pointer"><input type="checkbox" data-act="selLabel" data-id="${n.id}" ${sel.has(n.id) ? 'checked' : ''} style="width:22px;height:22px;flex:none;accent-color:var(--accent)"><div class="main"><span class="t">${esc(n.name)}</span></div>${n.code ? `<span class="tape">${esc(n.code)}</span>` : ''}</label>`).join('')}</details>
     <div class="toolbar"><button class="btn primary" data-act="printLabels">${ic('docs')}인쇄</button><span class="muted" style="font-size:13px">A4에 인쇄해 잘라 붙이세요. 라벨지에 인쇄하면 더 오래갑니다.</span></div>
     ${DEMO ? `<div class="notice">${ic('info')}<span>체험판 화면에서는 인쇄 창이 열리지 않습니다. 실제 앱에서는 이 버튼으로 바로 인쇄됩니다.</span></div>` : ''}
-    <div class="labels" id="labels">${chosen.map(l => `<div class="qrlabel"><span class="lh">${logo('logo')}가야엘리베이터</span>${qrSvg(base + '?loc=' + encodeURIComponent(l.code || l.id))}<span class="code">${esc(l.code || l.name)}</span><span class="nm">${esc(locPathText(l.id))}</span></div>`).join('')}</div>`;
+    <p class="muted" style="font-size:12.5px;margin:0">화면에 보이는 QR은 같은 휴대폰으로 찍을 수 없으니, 라벨 아래 「열기」를 누르면 QR을 찍었을 때와 같은 위치 화면이 열립니다. 「열기」는 인쇄되지 않습니다.</p>
+    <div class="labels" id="labels">${chosen.map(l => `<div class="qrlabel"><span class="lh">${logo('logo')}가야엘리베이터</span>${qrSvg(base + '?loc=' + encodeURIComponent(l.code || l.id))}<span class="code">${esc(l.code || l.name)}</span><span class="nm">${esc(locPathText(l.id))}</span><button class="btn sm qropen noprint" data-act="loc" data-id="${l.id}">${ic('box')}열기</button></div>`).join('')}</div>`;
   return { title: 'QR 라벨', crumbs: crumbs([{ label: '더보기', act: 'tab', data: { t: 'more' } }, { label: '위치 관리', act: 'go', data: { v: 'places' } }, { label: 'QR 라벨' }]), body };
 };
 function qrSvg(text) {
@@ -1721,17 +2049,77 @@ VIEW['more.trash'] = () => {
 VIEW['more.guide'] = () => {
   const adm = can(S.user, 'users');
   const body = `<article class="guide hero" style="gap:6px">
-    <h3>자재 쓰는 법</h3><ol><li>가운데 <b>스캔</b>으로 선반 QR을 찍으면 그 선반의 자재가 열립니다. 쓸 자재 옆 <b>꺼내기</b>를 누르고 수량·현장만 맞추면 출고가 끝납니다.</li><li>자재 탭 검색창이나 위치별·분류별 목록으로 찾아 품목을 열고 <b>출고</b>를 눌러도 됩니다. 자주 쓰는 품목은 자재 첫 화면 「내가 자주 쓰는 품목」에 저절로 모입니다.</li><li>저장 직후 아래에 뜨는 <b>되돌리기</b>를 누르면 방금 기록이 취소됩니다.</li><li>꺼냈다가 안 쓰고 돌려놓으면 기록 옆의 <b>출고 취소 (안 씀)</b>를 누릅니다. 수량이 원래대로 돌아갑니다. 본인 기록은 7일 안에 취소할 수 있고, 그 뒤에는 관리자가 합니다.</li><li>새로 들어온 자재는 <b>입고</b>, 다른 캐비넷으로 옮길 때는 <b>이동</b>입니다.</li><li>지난 기록은 자재 첫 화면 「최근 입출고」의 <b>전체 기록·찾기</b>에서 달별로 보고, 현장 이름·품명·사람으로 찾을 수 있습니다.</li></ol>
-    <h3>자료 쓰는 법</h3><ol><li>자료 탭에서 폴더를 열고 <b>올리기</b>로 PDF·엑셀·사진을 그대로 올립니다.</li><li>검색창에 에러코드나 부품명을 치면 파일 안의 글자까지 찾아 줍니다.</li><li>교육 영상은 유튜브에 「일부 공개」로 올린 뒤 <b>영상·링크</b>로 주소만 등록합니다.</li><li>자주 보는 자료는 파일 화면 오른쪽 위 <b>☆</b>를 누르면 자료 첫 화면 맨 위 「즐겨찾기」에 모입니다. 최근에 본 자료도 그 아래에 보입니다.</li></ol>
+    <h3>자재 쓰는 법</h3><ol><li>가운데 <b>스캔</b>으로 선반 QR을 찍으면 그 선반의 자재가 열립니다. 쓸 자재 옆 <b>꺼내기</b>를 누르고 수량·현장만 맞추면 출고가 끝납니다.</li><li>자재 탭 검색창이나 위치별·분류별 목록으로 찾아 품목을 열고 <b>출고</b>를 눌러도 됩니다. 자주 쓰는 품목은 자재 첫 화면 「내가 자주 쓰는 품목」에 저절로 모입니다.</li><li>저장 직후 아래에 뜨는 <b>되돌리기</b>를 누르면 방금 기록이 취소됩니다.</li><li>꺼냈다가 안 쓰고 돌려놓으면 기록 옆의 <b>출고 취소 (안 씀)</b>를 누릅니다. 수량이 원래대로 돌아갑니다. 본인 기록은 7일 안에 취소할 수 있고, 그 뒤에는 관리자가 합니다.</li><li>새로 들어온 자재는 <b>입고</b>, 다른 캐비넷으로 옮길 때는 <b>이동</b>입니다.</li><li>지난 기록은 자재 첫 화면 위쪽 <b>입출고 기록</b>에서 달별로 보고, 현장 이름·품명·사람으로 찾을 수 있습니다.</li></ol>
+    <h3>자료 쓰는 법</h3><ol><li>자료 탭에서 폴더를 열고 <b>올리기</b>로 PDF·엑셀·사진을 그대로 올립니다.</li><li>검색창에 에러코드나 부품명을 치면 파일 안의 글자까지 찾아 줍니다.</li><li>교육 영상은 유튜브에 「일부 공개」로 올린 뒤 <b>영상·링크</b>로 주소만 등록합니다.</li><li>자주 보는 자료는 파일 화면 오른쪽 위 <b>☆</b>를 누르면 자료 탭의 <b>「내 저장함」</b>에 모이고 폰에도 저장됩니다. 전파가 없는 기계실·피트에서도 열리고, 내 폴더를 만들어 정리할 수 있습니다(이 휴대폰에만 저장).</li><li>지난 입출고는 자재 첫 화면 위쪽 바로가기 <b>「입출고 기록」</b>에서, 현장마다 쓴 자재는 <b>「현장별 이력」</b>에서 봅니다.</li></ol>
     ${adm ? `<h3>가입 승인과 퇴사자</h3><ol><li>더보기 › 직원 관리에서 이름·사내번호를 확인하고 승인합니다.</li><li>비밀번호를 잊은 직원은 이름을 눌러 <b>비밀번호 초기화</b> → 화면에 뜬 임시 번호를 알려 주고, 로그인 뒤 본인이 바꾸게 합니다.</li><li>퇴사자는 지우지 않고 <b>사용 중지</b>합니다. 그 사람이 남긴 입출고 기록은 그대로 남습니다.</li></ol>
     <h3>위치 추가와 QR 라벨</h3><ol><li>더보기 › 위치 관리에서 캐비넷·선반을 추가하고 짧은 코드(예: WH-S5)를 붙입니다.</li><li>QR 라벨 만들기 → 인쇄 → 선반에 붙입니다. 앱의 <b>스캔</b> 탭으로 찍으면 그 선반 화면이 바로 열립니다. (안드로이드는 폰 기본 카메라로 찍어도 열립니다. 아이폰은 기본 카메라로 찍으면 사파리에서 열려 로그인을 따로 해야 하니 앱의 스캔 탭을 쓰세요.)</li></ol>
     <h3>빨간 불이 켜졌을 때 (시스템 상태)</h3><ol><li>직원들이 앱을 평소처럼 쓰고 있다면 급한 일은 아닙니다. 앱을 쓰는 것만으로도 서버는 깨어 있습니다.</li><li>회사용 구글 계정(gaya.elevator.app)에 로그인해 보안 경고나 계정 잠김 안내가 있는지 봅니다.</li><li>그래도 계속 빨간 불이면 개발자(재석)에게 연락합니다.</li><li>앱이 아예 열리지 않고 「서버가 쉬고 있습니다」라고 나오면: supabase.com 에 소유자 계정으로 로그인 → 가야엘리베이터 조직 › gaya-app 프로젝트 → <b>Resume project</b> 를 누르고 몇 분 기다립니다. 멈춘 뒤 1년 안이면 데이터는 그대로입니다.</li></ol>
-    <h3>재고 부족 알리기와 기록 받기</h3><ol><li>자재 첫 화면 「재고 부족」의 <b>목록 보내기</b>를 누르면 부족한 품목 목록을 카톡 등으로 바로 보낼 수 있습니다.</li><li>전체 기록·찾기 화면 오른쪽 위 <b>엑셀</b>을 누르면 그 달 기록(검색·종류로 거른 그대로)이 엑셀 파일로 받아집니다.</li></ol>
+    <h3>재고 부족 알리기와 기록 받기</h3><ol><li>자재 첫 화면 「재고 부족」의 <b>목록 보내기</b>를 누르면 부족한 품목 목록을 카톡 등으로 바로 보낼 수 있습니다.</li><li>입출고 기록 화면 오른쪽 위 <b>엑셀</b>을 누르면 그 달 기록(검색·종류로 거른 그대로)이 엑셀 파일로 받아집니다.</li><li>자재 첫 화면 바로가기 <b>「발주·입고」</b>: 부족한 만큼 미리 채운 발주 목록을 거래처에 보내고, 자재가 들어오면 「한 번에 입고」로 체크한 품목을 위치별로 한꺼번에 넣습니다.</li></ol>
     <h3>저장 용량 80% 경고</h3><p>개발자(재석)에게 연락합니다. 구글 원 구독(100GB 월 2,400원) 또는 무료 구글 계정 추가 중에서 고르면 되고, 어느 쪽이든 앱은 그대로 씁니다.</p>
     <h3>매년 1월에 할 일</h3><p>회사용 구글 계정(gaya.elevator.app)에 한 번 로그인해 드라이브의 「가야앱 백업」 폴더를 열어 봅니다. 구글은 2년 동안 쓰지 않은 계정을 지우기 때문에, 사람이 1년에 한 번 들어가 두는 것입니다.</p>
     <h3>앱이 업데이트되면</h3><p>개발자가 고친 내용은 올리는 즉시 반영됩니다. 직원 폰에서 예전 화면이 보이면 앱을 완전히 닫았다가 다시 열면 됩니다.</p>` : ''}
   </article>`;
   return { title: adm ? '관리자 안내' : '사용 안내', crumbs: moreCr(adm ? '관리자 안내' : '사용 안내'), body };
+};
+
+/* ───────── 사용 통계 · 최소 재고 추천 (관리자) ───────── */
+function statsData(list, month) {
+  const [y, m] = month.split('-').map(Number);
+  const start = new Date(y, m - 1, 1), from3 = new Date(y, m - 3, 1), end = new Date(y, m, 1);
+  const live = t => !t.canceled_by;
+  const cur = list.filter(t => toDate(t.created_at) >= start);
+  const outs = cur.filter(t => t.type === 'out' && live(t)), ins = cur.filter(t => t.type === 'in' && live(t));
+  const agg = (rows, key) => { const g = new Map(); rows.forEach(t => { const k = key(t); if (!k) return; const x = g.get(k) || { q: 0, n: 0 }; x.q += t.qty; x.n++; g.set(k, x); }); return g; };
+  const top = [...agg(outs, t => S.ix.item.has(t.item_id) ? t.item_id : null)].sort((a, b) => b[1].q - a[1].q).slice(0, 10);
+  const sites = [...agg(outs, t => t.site ? parseSite(t.site).name || t.site : null)].sort((a, b) => b[1].n - a[1].n || b[1].q - a[1].q).slice(0, 10);
+  const outs3 = list.filter(t => t.type === 'out' && live(t));
+  const first = outs3.length ? Math.min(...outs3.map(t => +toDate(t.created_at))) : +end;
+  const until = Math.min(Date.now(), +end);
+  const months = Math.max(1, Math.min(3, (until - Math.max(+from3, first)) / (30.44 * 864e5)));
+  const recs = [...agg(outs3, t => S.ix.item.has(t.item_id) ? t.item_id : null)].map(([id, x]) => { const it = S.ix.item.get(id); const avg = x.q / months; return { id, q: x.q, avg, rec: Math.max(1, Math.ceil(avg)), cur: it.min_qty }; })
+    .filter(x => x.rec !== x.cur).sort((a, b) => b.q - a.q);
+  return { outs: outs.length, outQty: outs.reduce((a, t) => a + t.qty, 0), ins: ins.length, top, sites, recs, months, short: until - first < 60 * 864e5 };
+}
+const barRow = (act, data, label, sub, val, ratio) => `<button class="barrow" data-act="${act}" ${data}><span class="bl"><span class="t">${label}</span>${sub ? `<span class="s">${sub}</span>` : ''}</span><span class="bv">${val}</span><span class="bar"><i style="width:${Math.max(2, Math.round(ratio * 100))}%"></i></span></button>`;
+VIEW['more.stats'] = r => {
+  const v = vd(); const isNow = r.month >= thisMonth();
+  const mb = `<div class="monthbar"><button class="iconbtn" data-act="statsMonth" data-d="-1" aria-label="이전 달">${ic('back')}</button><b>${monthLabel(r.month)}</b><button class="iconbtn" data-act="statsMonth" data-d="1" aria-label="다음 달" ${isNow ? 'disabled' : ''}>${ic('chev')}</button></div>`;
+  if (!v.top) return { title: '사용 통계', crumbs: moreCr('사용 통계'), body: mb + `<div class="ledger">${loadingBox('gauge')}</div>` };
+  const maxQ = v.top.length ? v.top[0][1].q : 1, maxN = v.sites.length ? Math.max(...v.sites.map(x => x[1].n)) : 1;
+  const off = S.minOff || new Set(); const pick = v.recs.filter(x => !off.has(x.id)).length;
+  const body = `${mb}
+    <div class="stats"><div class="stile"><span class="k">${ic('out')}출고</span><span class="v">${v.outs}<small>건</small></span></div><div class="stile"><span class="k">${ic('in')}입고</span><span class="v">${v.ins}<small>건</small></span></div><div class="stile"><span class="k">${ic('pin')}현장</span><span class="v">${v.sites.length}<small>곳</small></span></div></div>
+    <section class="sec"><div class="sec-h"><h2>많이 나간 자재</h2><span class="aside">출고 수량 순 · 취소 뺌</span></div><div class="ledger bars">${v.top.map(([id, x]) => { const it = S.ix.item.get(id); return barRow('item', `data-id="${id}"`, esc(itemTitle(it)), '', `${x.q}${esc(it.unit)} <small>${x.n}건</small>`, x.q / maxQ); }).join('') || empty('gauge', '이 달에는 출고가 없습니다.')}</div></section>
+    <section class="sec"><div class="sec-h"><h2>현장별 출고</h2><span class="aside">건수 순</span></div><div class="ledger bars">${v.sites.map(([nm, x]) => barRow('site', `data-v="${esc(nm)}"`, esc(nm), '', `${x.n}건 <small>${x.q}개</small>`, x.n / maxN)).join('') || empty('pin', '현장을 적은 출고가 없습니다.')}</div></section>
+    ${isNow ? `<section class="sec"><div class="sec-h"><h2>최소 재고 추천</h2><span class="aside">최근 3개월 기준</span></div>
+      <div class="notice">${ic('info')}<span>한 달 평균으로 나간 만큼을 최소 재고로 두면, 「부족」 표시가 뜬 뒤 다시 채울 때까지 한 달쯤 버틸 수 있습니다. 바꾸고 싶은 품목만 체크해서 반영하세요.${v.short ? ' <b>기록이 두 달이 안 돼 추천이 실제보다 낮거나 높을 수 있습니다.</b>' : ''}</span></div>
+      <div class="ledger">${v.recs.map(x => { const it = S.ix.item.get(x.id); return `<label class="crow ${off.has(x.id) ? 'off' : ''}"><input type="checkbox" data-act="minToggle" data-id="${x.id}" ${off.has(x.id) ? '' : 'checked'} aria-label="반영"><div class="main"><span class="t">${esc(itemTitle(it))}</span><span class="s">3개월 출고 ${x.q}${esc(it.unit)} · 한 달 평균 ${Math.round(x.avg * 10) / 10}${esc(it.unit)}</span></div><span class="recv"><span class="muted">${x.cur}</span> → <b>${x.rec}</b></span></label>`; }).join('') || empty('check', '지금 최소 재고가 사용량과 맞습니다.', '바꿀 만한 품목이 없습니다.')}</div>
+      ${v.recs.length ? `<button class="btn primary block big" data-act="minApply" data-write ${pick ? '' : 'disabled'}>선택한 ${pick}개 반영</button>` : ''}</section>` : ''}`;
+  return { title: '사용 통계', crumbs: moreCr('사용 통계'), body };
+};
+
+/* ───────── 직원 안내문 (A4 한 장, 인쇄·PDF) ───────── */
+function posterHtml(url, admins) {
+  const st = (n, t, b) => `<li><span class="n">${n}</span><div><b>${t}</b><p>${b}</p></div></li>`;
+  return `<div class="ps-head">${logo('logo')}<div><div class="ps-brand">(주)가야엘리베이터</div><div class="ps-title">자재·자료 앱 사용 안내</div></div></div>
+    <div class="ps-qr">${qrSvg(url)}<div><b>휴대폰 카메라로 QR을 찍으세요</b><span class="ps-url">${esc(url)}</span><a class="ps-btn" href="${esc(url)}" target="_blank" rel="noopener">휴대폰으로 보고 있다면 여기를 누르세요 ›</a><span>아이폰은 사파리, 안드로이드는 크롬에서 열립니다</span></div></div>
+    <ol class="ps-steps">
+      ${st(1, '가입 신청', '첫 화면 「가입 신청」에서 사내번호·이름·비밀번호를 적습니다. 관리자가 승인하면 바로 씁니다.')}
+      ${st(2, '홈 화면에 추가', '아이폰: 아래 공유 버튼 → 「홈 화면에 추가」<br>안드로이드: ⋮ 메뉴 → 「홈 화면에 추가」 또는 「앱 설치」')}
+      ${st(3, '자재 꺼내기', '가운데 「스캔」으로 선반 QR을 찍고, 쓸 자재 옆 「꺼내기」 → 수량·현장(동·호기) → 출고')}
+      ${st(4, '여러 개를 꺼낼 때', '「담기」로 모은 뒤 「한 번에 출고」. 현장은 한 번만 적으면 됩니다.')}
+      ${st(5, '잘못 눌렀으면', '저장 직후 뜨는 「되돌리기」. 꺼냈다가 안 쓴 자재는 기록의 「출고 취소 (안 씀)」')}
+      ${st(6, '자료 찾기', '자료 탭 검색에 에러코드·부품명 (ㄷㅇㄹㄹ처럼 초성도 됨). ☆ 를 누르면 「내 저장함」에 모이고 전파 없는 기계실에서도 열립니다.')}
+    </ol>
+    <div class="ps-foot">비밀번호를 잊었거나 궁금한 점은 ${admins.length ? '관리자(' + esc(admins.join(', ')) + ')' : '관리자'}에게 · 앱 안 더보기 › 사용 안내</div>`;
+}
+VIEW['more.poster'] = () => {
+  const url = CONFIG.APP_URL || (DEMO ? 'https://gaya-elevator.github.io/' : location.origin + location.pathname);
+  const admins = S.cache.people.filter(p => p.role === 'admin' && p.status === 'active').map(p => p.name);
+  const body = `<div class="toolbar"><button class="btn primary" data-act="printPoster">${ic('docs')}인쇄</button><button class="btn" data-act="shareApp">${ic('share')}앱 주소 보내기</button></div>
+    <p class="muted" style="font-size:13px;margin:0">A4 한 장 · 인쇄 창에서 「PDF로 저장」도 됩니다. 사무실·창고에 붙여 두세요. 휴대폰으로 보는 사람은 화면의 QR을 찍을 수 없으니 「앱 주소 보내기」로 카톡에 링크를 보내 주세요. 안내문 PDF 안의 「여기를 누르세요」도 눌러서 열립니다.</p>
+    <div class="posterwrap"><div id="poster" class="poster">${posterHtml(url, admins)}</div></div>`;
+  return { title: '직원 안내문', crumbs: moreCr('직원 안내문'), body };
 };
 
 /* ───────── 아래에서 올라오는 입력 시트 ───────── */
@@ -1753,10 +2141,21 @@ function folderPicker(k, sel, exclude, allowTop = true) {
 /* 입고할 품목 고르기: 목록 칸만 바꿔 그려 검색칸의 한글 입력이 끊기지 않게 한다 */
 function inPickList(q) {
   q = (q || '').trim().toLowerCase();
-  const list = S.cache.items.filter(i => !q || [i.name, i.spec, i.maker, i.models].join(' ').toLowerCase().includes(q)).slice(0, 60);
+  const list = S.cache.items.filter(i => !q || smatch([i.name, i.spec, i.maker, i.models].join(' '), q)).slice(0, 60);
   return list.map(i => `<button type="button" class="pick" data-act="pick" data-k="item_id" data-v="${i.id}"><div class="main"><span>${esc(itemTitle(i))}</span><span class="s">${esc(i.maker || '')}</span></div><span class="qty">${total(i.id)}<small>${esc(i.unit)}</small></span></button>`).join('') || `<div class="empty">찾는 품목이 없습니다. 새 품목은 관리자가 등록합니다.</div>`;
 }
-function updateSheetPart() { const el = $('#iq-list'); if (el && S.sheet) el.innerHTML = inPickList(S.sheet.d.iq); else render(); }
+function updateSheetPart() {
+  if (!S.sheet) return render();
+  const t = S.sheet.type, el = t === 'in' ? $('#iq-list') : t === 'locBulk' ? $('#lb-prev') : null;
+  if (!el) return render();
+  el.innerHTML = t === 'in' ? inPickList(S.sheet.d.iq) : locBulkPreview(S.sheet.d);
+}
+/* 현장 + 동 + 호기 칸 (출고·한 번에 출고 공용) */
+function siteFields(d) {
+  return `<div class="field"><label for="sh-site">현장 (선택)</label><div class="siterow"><input id="sh-site" data-bind="site" list="sites" value="${esc(d.site || '')}" placeholder="예: 한빛아파트" autocomplete="off" enterkeyhint="next"><div class="unitin"><input id="sh-dong" data-bind="dong" value="${esc(d.dong || '')}" inputmode="numeric" placeholder="103" autocomplete="off" enterkeyhint="next" aria-label="동"><span>동</span></div><div class="unitin ho"><input id="sh-ho" data-bind="ho" value="${esc(d.ho || '')}" inputmode="numeric" placeholder="2" autocomplete="off" enterkeyhint="done" aria-label="호기"><span>호기</span></div></div>
+    <datalist id="sites">${siteNames().map(x => `<option value="${esc(x)}">`).join('')}</datalist>
+    ${(S.mySites || []).length ? `<div class="sitechips"><span>최근</span>${S.mySites.slice(0, 4).map(x => `<button type="button" class="fchip sm" data-act="pickSite" data-v="${esc(x)}">${esc(x)}</button>`).join('')}</div>` : ''}</div>`;
+}
 
 function sheetView() {
   const s = S.sheet, d = s.d; let h = '';
@@ -1780,12 +2179,11 @@ function sheetView() {
     case 'out':
       h = sheetHead('출고', esc(itemTitle(it))) + `<div class="field"><span class="lab">꺼내는 위치</span>${d.quick && d.location_id ? `<div class="fixedloc"><span class="tape">${esc(locCode(d.location_id))}</span><span class="p">${esc(locPathText(d.location_id))}</span><button type="button" class="btn sm ghost" data-act="outFull">바꾸기</button></div>` : locPicker('location_id', d.location_id, { onlyWith: withStock(), qtyOf: stockAt })}</div>
         <div class="field"><span class="lab">수량 (${esc(unit)})${d.location_id ? ' · 이 위치에 ' + stockAt(d.location_id) + esc(unit) : ''}</span>${stepper('qty', d.qty)}</div>
-        <div class="field"><label for="sh-site">현장 (선택)</label><div class="siterow"><input id="sh-site" data-bind="site" list="sites" value="${esc(d.site || '')}" placeholder="예: 한빛아파트" autocomplete="off" enterkeyhint="next"><div class="unitin"><input id="sh-dong" data-bind="dong" value="${esc(d.dong || '')}" inputmode="numeric" placeholder="103" autocomplete="off" enterkeyhint="next" aria-label="동"><span>동</span></div><div class="unitin ho"><input id="sh-ho" data-bind="ho" value="${esc(d.ho || '')}" inputmode="numeric" placeholder="2" autocomplete="off" enterkeyhint="done" aria-label="호기"><span>호기</span></div></div>
-          <datalist id="sites">${siteNames().map(x => `<option value="${esc(x)}">`).join('')}</datalist>
-          ${(S.mySites || []).length ? `<div class="sitechips"><span>최근</span>${S.mySites.slice(0, 4).map(x => `<button type="button" class="fchip sm" data-act="pickSite" data-v="${esc(x)}">${esc(x)}</button>`).join('')}</div>` : ''}</div>
+        ${siteFields(d)}
         <div class="field"><label for="sh-note">메모 (선택)</label><input id="sh-note" data-bind="note" value="${esc(d.note || '')}"></div>
-        ${sheetErr()}${okBtn('출고 ' + qn + unit, 'out')}
-        <p class="muted" style="margin:0;font-size:12.5px">꺼냈다가 안 쓰면 기록에서 「출고 취소 (안 씀)」를 누르면 수량이 돌아옵니다.</p>`;
+        ${sheetErr()}${cart().length ? `<div class="notice">${ic('box')}<span>담은 자재 <b>${cart().length}가지</b>가 있습니다. 이것도 「담기」 하면 현장을 한 번만 적고 한 번에 출고합니다.</span></div>` : ''}
+        <div class="outbtns"><button class="btn big" data-act="cartAdd" data-write ${S.busy ? 'disabled' : ''}>${ic('plus')}담기</button>${okBtn('출고 ' + qn + unit, 'out')}</div>
+        <p class="muted" style="margin:0;font-size:12.5px">여러 자재를 꺼낼 때는 「담기」로 모아 한 번에 출고하세요. 꺼냈다가 안 쓰면 기록에서 「출고 취소 (안 씀)」를 누르면 수량이 돌아옵니다.</p>`;
       break;
     case 'move':
       h = sheetHead('이동', esc(itemTitle(it))) + `<div class="field"><span class="lab">보내는 위치</span>${locPicker('from', d.from, { onlyWith: withStock(), qtyOf: stockAt })}</div>
@@ -1862,6 +2260,58 @@ function sheetView() {
     case 'tempPw':
       h = sheetHead('임시 비밀번호') + `<p style="margin:0">${esc(d.name)}님에게 아래 번호를 알려 주세요. 로그인한 뒤 더보기 › 내 정보에서 바로 바꾸도록 안내하세요.</p><div class="total" style="justify-content:center;border:0;padding:0"><span class="big mono" style="letter-spacing:.12em">${esc(d.pw)}</span></div><button class="btn block" data-act="copyPw" data-pw="${esc(d.pw)}">번호 복사</button><button class="btn primary block big" data-act="sheetClose">확인</button>`;
       break;
+    case 'cart': {
+      const rows = cart(); const sq = (r, i) => d['cq_' + i] ?? String(r.qty);
+      h = sheetHead('한 번에 출고', `담은 자재 ${rows.length}가지 · 현장은 한 번만 적으면 됩니다`)
+        + `<div class="ledger cartlist">${rows.map((r, i) => { const it = S.ix.item.get(r.item_id); const have = ((S.ix.byItem.get(r.item_id) || []).find(x => x.location_id === r.location_id) || {}).qty || 0;
+          return `<div class="crow ${isInt(sq(r, i), 1) && +sq(r, i) <= have ? '' : 'bad'}"><div class="main"><span class="t">${esc(itemTitle(it))}</span><span class="s"><span class="tape">${esc(locCode(r.location_id))}</span> 이 위치에 ${have}${esc(it ? it.unit : '')}</span></div>
+            <div class="ministep"><button type="button" data-act="cartStep" data-i="${i}" data-d="-1" aria-label="하나 빼기">−</button><input id="cq-${i}" data-bind="cq_${i}" inputmode="numeric" value="${esc(sq(r, i))}" aria-label="수량" autocomplete="off"><button type="button" data-act="cartStep" data-i="${i}" data-d="1" aria-label="하나 더하기">+</button></div>
+            <button type="button" class="iconbtn" data-act="cartDel" data-i="${i}" aria-label="빼기">${ic('x')}</button></div>`; }).join('') || empty('box', '담은 자재가 없습니다.')}</div>
+          ${siteFields(d)}
+          <div class="field"><label for="sh-note">메모 (선택)</label><input id="sh-note" data-bind="note" value="${esc(d.note || '')}"></div>
+          ${sheetErr()}<div class="row2"><button class="btn big ghost" data-act="cartClear">비우기</button>${okBtn('출고 ' + rows.length + '가지', 'out')}</div>`;
+      break;
+    }
+    case 'locBulk': {
+      const zones = S.ix.locKids.get(null) || [];
+      h = sheetHead('위치 한 번에 만들기', '구역 › 캐비넷·선반 › 칸 을 한꺼번에 만들고 QR 라벨 코드도 붙입니다')
+        + `<div class="field"><span class="lab">① 어디에</span><div class="pickgrid" style="max-height:none">${[['', '새 구역 만들기']].concat(zones.map(z => [z.id, z.name + (z.code ? ' · ' + z.code : '')])).map(([v, l]) => `<button type="button" class="pick" data-act="pick" data-k="zone" data-v="${v}" aria-pressed="${(d.zone || '') === v}"><span class="ic">${ic(v ? 'pin' : 'plus')}</span><div class="main"><span>${esc(l)}</span></div></button>`).join('')}</div></div>
+        ${d.zone ? '' : `<div class="row2"><div class="field"><label for="lb-zn">구역 이름</label><input id="lb-zn" data-bind="zname" data-live value="${esc(d.zname || '')}" placeholder="예: 창고" autocomplete="off"></div><div class="field"><label for="lb-zc">구역 코드</label><input id="lb-zc" data-bind="zcode" data-live value="${esc(d.zcode || '')}" placeholder="예: WH" autocapitalize="characters" autocomplete="off"></div></div>`}
+        <div class="field"><span class="lab">② 캐비넷·선반</span><div class="seg block" role="group">${['선반', '캐비넷'].map(t => `<button type="button" data-act="lbType" data-v="${t}" aria-pressed="${(d.utype || '선반') === t}">${t}</button>`).join('')}</div></div>
+        <div class="lbrange"><div class="field"><label for="lb-a">번호 처음</label><input id="lb-a" data-bind="from" data-live inputmode="numeric" value="${esc(d.from ?? '1')}" autocomplete="off"></div><span class="tilde">~</span><div class="field"><label for="lb-b">번호 끝</label><input id="lb-b" data-bind="to" data-live inputmode="numeric" value="${esc(d.to ?? '4')}" autocomplete="off"></div><div class="field"><label for="lb-uc">코드 앞부분</label><input id="lb-uc" data-bind="ucode" data-live value="${esc(d.ucode || '')}" placeholder="${esc(locBulkPlan(d).auto)}" autocapitalize="characters" autocomplete="off"></div></div>
+        <div class="field"><span class="lab">③ 칸 (선택)</span><div class="filters" style="margin:0;padding:0;flex-wrap:wrap">${[['', '칸 없음'], ['상,하', '상·하'], ['상,중,하', '상·중·하'], ['1,2,3,4', '1·2·3·4']].map(([v, l]) => `<button type="button" class="fchip" data-act="lbSlots" data-v="${v}" aria-pressed="${(d.slots || '') === v}">${l}</button>`).join('')}</div><input id="lb-sl" data-bind="slots" data-live value="${esc(d.slots || '')}" placeholder="직접 적기: 예) 상,중,하" autocomplete="off"></div>
+        <div id="lb-prev">${locBulkPreview(d)}</div>${sheetErr()}${okBtn('만들기')}`;
+      break;
+    }
+    case 'recv': {
+      const rows = orderRows().filter(r => r.on && r.qty > 0); const locs = flatTree(S.ix.locKids);
+      h = sheetHead('한 번에 입고', `체크한 ${rows.length}가지 · 품목마다 넣을 위치와 수량을 확인하세요`)
+        + `<div class="ledger cartlist recvlist">${rows.map(r => { const it = S.ix.item.get(r.id); const q = d['rq_' + r.id] ?? String(r.qty); const loc = d['rl_' + r.id] || '';
+          return `<div class="crow ${isInt(q, 1) && loc ? '' : 'bad'}"><div class="main"><span class="t">${esc(itemTitle(it))}</span><select id="rl-${r.id}" data-bind="rl_${r.id}" aria-label="넣을 위치"><option value="">넣을 위치 고르기</option>${locs.map(({ n, depth }) => `<option value="${n.id}" ${loc === n.id ? 'selected' : ''}>${'\u00a0\u00a0'.repeat(depth)}${esc(n.name)}${n.code ? ' · ' + esc(n.code) : ''}${qtyAt(r.id, n.id) ? ' (지금 ' + qtyAt(r.id, n.id) + ')' : ''}</option>`).join('')}</select></div>
+            <div class="ministep"><button type="button" data-act="recvStep" data-id="${r.id}" data-d="-1" aria-label="하나 빼기">−</button><input id="rq-${r.id}" data-bind="rq_${r.id}" inputmode="numeric" value="${esc(q)}" aria-label="수량" autocomplete="off"><button type="button" data-act="recvStep" data-id="${r.id}" data-d="1" aria-label="하나 더하기">+</button></div><span class="unit">${esc(it.unit)}</span></div>`; }).join('') || empty('box', '체크한 품목이 없습니다.')}</div>
+          <div class="field"><label for="sh-note">메모 (선택)</label><input id="sh-note" data-bind="note" value="${esc(d.note || '')}" placeholder="예: 10월 발주분, 거래처 이름"></div>
+          ${sheetErr()}${okBtn('입고 ' + rows.length + '가지', 'in')}
+          <p class="muted" style="margin:0;font-size:12.5px">위치는 그 품목이 지금 가장 많이 있는 곳으로 미리 골라 두었습니다. 넣은 품목은 발주 목록에서 빠집니다.</p>`;
+      break;
+    }
+    case 'myFolder':
+      h = sheetHead(d.id ? '내 폴더 이름 바꾸기' : '내 폴더 만들기', '내 저장함 정리용 · 이 휴대폰에만 저장됩니다') + `<div class="field"><label for="sh-mf">폴더 이름</label><input id="sh-mf" data-bind="name" value="${esc(d.name || '')}" placeholder="예: 자주 보는 회로도" data-autofocus autocomplete="off"></div>${sheetErr()}${okBtn(d.id ? '저장' : '만들기')}`;
+      break;
+    case 'myMove': {
+      const md = myData(); const doc = S.ix.doc.get(d.id);
+      h = sheetHead('폴더로 옮기기', esc(doc ? doc.name : '')) + `<div class="pickgrid" style="max-height:calc(50vh / var(--z,1))"><button type="button" class="pick" data-act="pick" data-k="target" data-v="" aria-pressed="${!d.target}"><span class="ic">${ic('starOn')}</span><div class="main"><span>내 저장함 (맨 위)</span></div></button>${flatMy(md).map(({ n, depth }) => `<button type="button" class="pick" data-act="pick" data-k="target" data-v="${n.id}" aria-pressed="${d.target === n.id}" style="padding-left:${14 + depth * 16}px"><span class="folder-ic mine" style="width:24px;height:24px">${ic('folder')}</span><div class="main"><span>${esc(n.name)}</span></div></button>`).join('')}</div>
+        <button type="button" class="btn block" data-act="myMkdirHere">${ic('folderPlus')}새 폴더 만들어 넣기</button>${sheetErr()}${okBtn('여기로 옮기기')}`;
+      break;
+    }
+    case 'myDocMenu': {
+      const doc = S.ix.doc.get(d.id); if (!doc) { S.sheet = null; return ''; } const off = offInfo(doc.id);
+      h = sheetHead(doc.name, off ? '폰에 저장됨 · ' + fmtSize(off.size) : '아직 폰에 없음') + `<div class="ledger">
+        <button class="lrow" data-act="myMoveOpen" data-id="${doc.id}"><span class="ic">${ic('folder')}</span><div class="main"><span class="t">내 폴더로 옮기기</span></div></button>
+        ${doc.kind === 'file' ? `<button class="lrow" data-act="docDownload" data-id="${doc.id}"><span class="ic">${ic('download')}</span><div class="main"><span class="t">파일 열기</span><span class="s">휴대폰 앱(PDF·엑셀·한글 등)으로 엽니다</span></div></button>` : ''}
+        ${!off && offOK(doc) ? `<button class="lrow" data-act="offSave" data-id="${doc.id}"><span class="ic">${ic('phone')}</span><div class="main"><span class="t">폰에 저장</span></div></button>` : ''}
+        <button class="lrow" data-act="myRemove" data-id="${doc.id}"><span class="ic" style="color:var(--crit);background:var(--crit-soft)">${ic('x')}</span><div class="main"><span class="t" style="color:var(--crit)">내 저장함에서 빼기</span><span class="s">폰에 저장한 파일도 지웁니다. 원래 자료는 그대로입니다</span></div></button></div>`;
+      break;
+    }
     case 'install': {
       const ios = isIOS() || DEMO, and = !isIOS() || DEMO;
       h = sheetHead('홈 화면에 앱 추가', '한 번만 해 두면 아이콘을 눌러 바로 열립니다')
@@ -1904,9 +2354,47 @@ ACT.sheetOk = () => {
       if (String(d.min_qty ?? '').trim() !== '' && !isInt(d.min_qty)) return bad('최소 재고는 0 이상의 정수로 입력하세요. (모르면 비워 두세요)');
       let p = d;
       if (d.id && s.orig) { p = { id: d.id }; ['name', 'spec', 'maker', 'models', 'category_id', 'unit', 'min_qty', 'memo'].forEach(k => { if (String(d[k] ?? '') !== String(s.orig[k] ?? '')) p[k] = d[k]; }); } // 바꾼 칸만 보낸다
-      return run(() => A.saveItem(p), d.id ? '저장했습니다' : '품목을 추가했습니다').then(id => { if (id && !d.id && id !== true) nav({ tab: 'items', view: 'item', id }); });
+      return run(() => A.saveItem(p), d.id ? '저장했습니다' : '품목을 추가했습니다').then(id => { if (!id || d.id || id === true) return; if (d.countLoc) { countAdd(d.countLoc, id); render(); return; } nav({ tab: 'items', view: 'item', id }); });
     },
     memo: () => run(() => A.saveItem({ id: d.id, memo: d.memo }), '메모를 저장했습니다'),
+    cart: () => {
+      const rows = cart(); if (!rows.length) return bad('담은 자재가 없습니다.');
+      for (let i = 0; i < rows.length; i++) { const v = d['cq_' + i] ?? String(rows[i].qty); if (!isInt(v, 1)) return bad(itemTitle(S.ix.item.get(rows[i].item_id)) + ': 수량을 1 이상의 정수로 입력하세요.'); rows[i].qty = +v; }
+      saveCart(); const site = siteText(d);
+      return run(() => A.stockOutMany({ rows: rows.map(r => ({ item_id: r.item_id, location_id: r.location_id, qty: r.qty })), site, note: d.note || '', op_id: d.op_id }), null)
+        .then(r => { if (!r) return; S.cart = []; saveCart(); render(); if (site) rememberSite(site); undoable(`${rows.length}가지 출고했습니다${site ? ' · ' + site : ''}`, r); });
+    },
+    recv: () => {
+      const rows = orderRows().filter(r => r.on && r.qty > 0); if (!rows.length) return bad('체크한 품목이 없습니다.');
+      const out = [];
+      for (const r of rows) { const it = S.ix.item.get(r.id); const q = d['rq_' + r.id] ?? String(r.qty); const loc = d['rl_' + r.id];
+        if (!isInt(q, 1)) return bad(itemTitle(it) + ': 수량을 1 이상의 정수로 입력하세요.');
+        if (!loc || !S.ix.loc.has(loc)) return bad(itemTitle(it) + ': 넣을 위치를 고르세요.');
+        out.push({ item_id: r.id, location_id: loc, qty: +q }); }
+      return run(() => A.stockInMany({ rows: out, note: d.note || '발주 입고', op_id: d.op_id }), null).then(ids => {
+        if (!ids) return; const done = new Set(out.map(x => x.item_id));
+        S.order.rows = S.order.rows.filter(r => !done.has(r.id)); S.lastRecvLoc = out[out.length - 1].location_id; render();
+        undoable(`${out.length}가지 입고했습니다 · 발주 목록에서 뺐습니다`, ids);
+      });
+    },
+    myFolder: () => {
+      const n = (d.name || '').trim(); if (!n) return bad('폴더 이름을 입력하세요.');
+      const md = myData();
+      if (d.id) { const f = md.folders.find(x => x.id === d.id); if (f) f.name = n; }
+      else { const f = { id: uid('mf'), name: n, parent: d.parent || null }; md.folders.push(f); if (d.thenMove) md.place[d.thenMove] = f.id; }
+      mySave(md); S.sheet = null; render(); toast(d.id ? '이름을 바꿨습니다' : d.thenMove ? `「${n}」 폴더를 만들어 넣었습니다` : `「${n}」 폴더를 만들었습니다`);
+    },
+    myMove: () => { const md = myData(); if (d.target) md.place[d.id] = d.target; else delete md.place[d.id]; mySave(md); S.sheet = null; render(); toast('옮겼습니다 · ' + ('내 저장함' + myPath(md, d.target || null).map(x => ' › ' + x.name).join(''))); },
+    locBulk: () => {
+      const P = locBulkPlan(d);
+      if (P.err) return bad(P.err);
+      return run(() => A.locationsBulk(P.zone ? P.zone.id : null, P.rows, d.op_id), n => n ? n + '곳을 만들었습니다 · 바로 QR 라벨을 인쇄할 수 있습니다' : '새로 만들 위치가 없습니다 (모두 이미 있음)').then(n => {
+        if (n === false) return;
+        const codes = new Set(); (function walk(rs) { rs.forEach(r => { if (r.code) codes.add(r.code); walk(r.kids || []); }); })(P.rows);
+        S.labelSel = new Set(S.cache.locations.filter(l => codes.has((l.code || '').toUpperCase()) && l.kind !== 'zone').map(l => l.id));
+        nav({ tab: 'more', view: 'labels' });
+      });
+    },
     loc: () => { if (!(d.name || '').trim()) return bad('위치 이름을 입력하세요.'); return run(() => A.saveLocation(d), d.id ? '저장했습니다' : '위치를 추가했습니다'); },
     cat: () => { if (!(d.name || '').trim()) return bad('분류 이름을 입력하세요.'); return run(() => A.saveCategory(d), '저장했습니다'); },
     mkdir: () => { const n = (d.name || '').trim(); if (!n) return bad('폴더 이름을 입력하세요.'); if (/[\/\\]/.test(n)) return bad('폴더 이름에 / 나 \\ 는 쓸 수 없습니다.'); return run(() => A.mkdir(d), '폴더를 만들었습니다'); },
@@ -1944,7 +2432,7 @@ Object.assign(ACT, {
   mode: d => { S.itemsMode = d.m; store.set('gaya-mode', d.m); S.q = ''; S.searchRes = null; resetStack({ ...ROOTS.items }); },
   locRoot: () => resetStack({ ...ROOTS.items }),
   catRoot: () => { S.itemsMode = 'cat'; store.set('gaya-mode', 'cat'); resetStack({ ...ROOTS.items }); },
-  loc: d => { S.q = ''; S.searchRes = null; toItemsTab(); nav({ tab: 'items', view: 'browse', node: d.id, mode: 'loc' }); },
+  loc: d => { S.q = ''; S.searchRes = null; toItemsTab(); if (S.countNext && can(S.user, 'adjust')) { S.countNext = false; return nav({ tab: 'items', view: 'count', node: d.id }); } nav({ tab: 'items', view: 'browse', node: d.id, mode: 'loc' }); },
   cat: d => { S.q = ''; S.searchRes = null; nav({ tab: 'items', view: 'browse', node: d.id, mode: 'cat' }); },
   item: d => { toItemsTab(); nav({ tab: 'items', view: 'item', id: d.id }); },
   folder: d => { S.docsQ = ''; S.docSearchRes = null; if (!d.id) return resetStack({ ...ROOTS.docs }); const i = S.stack.findIndex(r => r.folder === d.id); if (i >= 0) { S.stack = S.stack.slice(0, i + 1); render(); window.scrollTo(0, 0); } else nav({ tab: 'docs', view: 'browse', folder: d.id }); },
@@ -1956,7 +2444,7 @@ Object.assign(ACT, {
   logout: async () => {
     try { await S.api.logout(); } catch {}
     store.del('gaya-cache'); store.del('gaya-user'); store.del('gaya-sites'); store.del('gaya-mysites');
-    S.user = null; S.cache = null; S.ix = null; S.sheet = null; S.authView = 'login'; S.stack = [{ ...ROOTS.items }]; S.tab = 'items'; S.lastTab = {}; S.recentSites = []; S.mySites = []; S.q = ''; S.docsQ = ''; S.searchRes = null; S.docSearchRes = null;
+    S.user = null; S.cache = null; S.ix = null; S.sheet = null; S.authView = 'login'; S.stack = [{ ...ROOTS.items }]; S.tab = 'items'; S.lastTab = {}; S.recentSites = []; S.mySites = []; S.cart = null; S.cartSite = null; S.order = null; S.count = null; closeViewer(); S.q = ''; S.docsQ = ''; S.searchRes = null; S.docSearchRes = null;
     for (const k in VIEWDATA) delete VIEWDATA[k];
     stopScan(); render();
   },
@@ -2072,14 +2560,8 @@ Object.assign(ACT, {
 /* 입고·출고·이동 직후 잠깐 뜨는 「되돌리기」: 누르면 방금 기록을 취소해 수량을 원래대로 돌린다 */
 function undoable(msg, tid) {
   if (!tid || tid === true || !pref('undo')) return toast(msg);
-  toast(msg, false, { label: '되돌리기', fn: () => run(() => S.api.stockCancel({ tx_id: tid, op_id: opId() }), '되돌렸습니다 · 수량이 원래대로 돌아갔습니다') });
-}
-/* 현장: 「현장 이름 + 동 + 호기」 칸을 한 줄(예: 한빛아파트 103동 2호기)로 저장하고, 되읽을 때는 다시 나눈다 */
-const siteText = d => { const n = String(d.site || '').trim(), dg = String(d.dong || '').trim().replace(/\s*동$/, ''), ho = String(d.ho || '').trim().replace(/\s*호기?$/, ''); return [n, dg && dg + '동', ho && ho + '호기'].filter(Boolean).join(' '); };
-function parseSite(s) {
-  s = String(s || '').trim();
-  const m = s.match(/^(.*?)(?:(?:^|\s+)([0-9A-Za-z][0-9A-Za-z-]*|[가-힣])동)?(?:(?:^|\s+)([0-9A-Za-z-]+)호기)?$/);
-  return m ? { name: m[1].trim(), dong: m[2] || '', ho: m[3] || '' } : { name: s, dong: '', ho: '' };
+  const many = Array.isArray(tid);
+  toast(msg, false, { label: '되돌리기', fn: () => run(() => many ? S.api.stockCancelMany(tid, opId()) : S.api.stockCancel({ tx_id: tid, op_id: opId() }), many ? `되돌렸습니다 · ${tid.length}가지 수량이 원래대로 돌아갔습니다` : '되돌렸습니다 · 수량이 원래대로 돌아갔습니다') });
 }
 const siteNames = () => [...new Set((S.recentSites || []).map(x => parseSite(x).name).filter(Boolean))].slice(0, 40);
 function rememberSite(site) {
@@ -2095,7 +2577,7 @@ async function shareOut(title, text) {
 const TOUR = [
   { icon: 'scan', t: '선반에서 바로 꺼내기', b: '가운데 <b>스캔</b>으로 선반의 QR을 찍으면 그 선반의 자재가 열립니다. 쓸 자재 옆 <b>꺼내기</b>를 누르고 수량만 맞추면 출고가 끝납니다.' },
   { icon: 'undo', t: '잘못 눌렀다면 되돌리기', b: '입고·출고·이동을 저장하면 아래에 <b>되돌리기</b>가 잠깐 뜹니다. 꺼냈다가 안 쓴 자재는 기록 옆 <b>출고 취소 (안 씀)</b>를 누르면 수량이 돌아옵니다. 되돌리기 버튼이 필요 없으면 더보기 › 알림 창 설정에서 끌 수 있습니다.' },
-  { icon: 'docs', t: '자료는 검색으로', b: '자료 탭 검색창에 에러코드나 부품명을 치면 파일 안의 글자까지 찾습니다. 자주 보는 자료는 <b>☆</b>를 눌러 두면 자료 첫 화면 맨 위에 모입니다.' }
+  { icon: 'docs', t: '자료는 검색으로, 자주 보는 건 내 저장함에', b: '자료 탭 검색창에 에러코드나 부품명을 치면 파일 안의 글자까지 찾습니다(ㄷㅇㄹㄹ 같은 초성도 됨). 자주 보는 자료는 <b>☆</b>를 누르면 <b>「내 저장함」</b>에 모이고 폰에도 저장돼, 전파 없는 기계실에서도 열립니다.' }
 ];
 const ymd = d => d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate());
 Object.assign(ACT, {
@@ -2136,7 +2618,14 @@ Object.assign(ACT, {
     if (DEMO) note('체험판 화면에서는 파일이 안 받아질 수 있습니다. 실제 앱에서는 바로 받아집니다.'); else toast('빈 양식을 받았습니다. 엑셀에서 열어 채우세요.');
   },
 
-  fav: d => { const s = favs(); const on = !s.has(d.id); on ? s.add(d.id) : s.delete(d.id); store.set(favKey(), [...s]); render(); toast(on ? '즐겨찾기에 넣었습니다 · 자료 첫 화면 맨 위에 보입니다' : '즐겨찾기에서 뺐습니다'); },
+  fav: d => {
+    const s = favs(); const on = !s.has(d.id); on ? s.add(d.id) : s.delete(d.id); store.set(favKey(), [...s]);
+    const doc = S.ix.doc.get(d.id);
+    if (!on) { const md = myData(); delete md.place[d.id]; mySave(md); const had = !!offInfo(d.id); offDel(d.id); render(); return toast(had ? '내 저장함에서 뺐습니다 · 폰에 저장한 파일도 지웠습니다' : '내 저장함에서 뺐습니다'); }
+    render();
+    if (offOK(doc)) { toast('내 저장함에 넣었습니다 · 폰에도 저장합니다'); return saveOffline(d.id); }
+    toast('내 저장함에 넣었습니다 · 자료 탭 「내 저장함」에 모입니다');
+  },
 
   install: async () => {
     const ev = S.installEvt;
@@ -2155,6 +2644,291 @@ Object.assign(ACT, {
 /* 안드로이드 크롬: 「앱 설치」 창을 우리 버튼으로 띄우기 위해 잡아 둔다 */
 window.addEventListener('beforeinstallprompt', e => { e.preventDefault(); S.installEvt = e; if (S.user && !S.sheet) render(); });
 window.addEventListener('appinstalled', () => { S.installEvt = null; if (S.user) { render(); toast('홈 화면에 추가했습니다. 다음부터는 아이콘으로 여세요.'); } });
+
+/* ───────── 업데이트 5 ───────── */
+
+/* 담은 자재 (여러 개 한 번에 꺼내기) — 사람·기기마다 저장 */
+const cartKey = () => 'gaya-cart-' + (S.user ? S.user.id : '');
+const cart = () => S.cart || (S.cart = (store.get(cartKey(), []) || []).filter(r => S.ix && S.ix.item.has(r.item_id) && S.ix.loc.has(r.location_id)));
+const saveCart = () => store.set(cartKey(), S.cart || []);
+function cartSync() { const s = S.sheet; if (!s || s.type !== 'cart') return; cart().forEach((r, i) => { const v = s.d['cq_' + i]; if (isInt(v, 1)) r.qty = +v; }); saveCart(); }
+
+/* 위치 한 번에 만들기: 고른 값으로 만들 위치 목록을 짠다 */
+function locBulkPlan(d) {
+  const zone = d.zone ? S.ix.loc.get(d.zone) : null;
+  const zcode = (zone ? zone.code || '' : String(d.zcode || '')).trim().toUpperCase();
+  const utype = d.utype || '선반';
+  const auto = (zcode ? zcode + '-' : '') + (utype === '캐비넷' ? 'C' : 'S');
+  const pre = String(d.ucode || '').trim().toUpperCase() || auto;
+  const slots = [...new Set(String(d.slots || '').split(/[,\s·/]+/).map(x => x.trim()).filter(Boolean))];
+  const a = String(d.from ?? '1').trim(), b = String(d.to ?? '4').trim();
+  let err = '';
+  if (!zone && !String(d.zname || '').trim()) err = '새 구역 이름을 적으세요. (예: 창고)';
+  else if (!isInt(a, 1) || !isInt(b, 1)) err = '번호는 1 이상의 정수로 적으세요.';
+  else if (+b < +a) err = '번호 끝이 처음보다 작습니다.';
+  else if (+b - +a >= 40) err = '한 번에 40개까지만 만들 수 있습니다.';
+  const units = [];
+  if (!err) for (let n = +a; n <= +b; n++) units.push({ name: utype + ' ' + n, code: pre + n, kids: slots.map(x => ({ name: x, code: pre + n + '-' + x.toUpperCase() })) });
+  const rows = zone ? units : [{ name: String(d.zname || '').trim(), code: zcode, kids: units }];
+  const byCode = new Map(S.cache.locations.filter(l => l.code).map(l => [l.code.toUpperCase(), l]));
+  let make = 0, have = 0, clash = '';
+  (function walk(rs, parentId, parentNew) {
+    rs.forEach(r => { const ex = r.code ? byCode.get(r.code) : null;
+      if (ex && (parentNew || (ex.parent_id || null) !== (parentId || null))) clash = clash || r.code;
+      if (ex) have++; else make++;
+      walk(r.kids || [], ex ? ex.id : null, !ex); });
+  })(rows, zone ? zone.id : null, false);
+  if (!err && clash) err = '이미 다른 곳에서 쓰는 라벨 코드가 있습니다: ' + clash + ' — 「코드 앞부분」을 바꾸세요.';
+  return { zone, zcode, auto, pre, slots, units, rows, make, have, err };
+}
+function locBulkPreview(d) {
+  const P = locBulkPlan(d);
+  if (P.err) return `<div class="notice warn">${ic('warn')}<span>${esc(P.err)}</span></div>`;
+  const lines = []; const byCode = new Set(S.cache.locations.map(l => (l.code || '').toUpperCase()).filter(Boolean));
+  (function walk(rs, depth) { rs.forEach(r => { if (lines.length < 40) lines.push(`<div class="lbline" style="padding-left:${depth * 18}px"><span>${esc(r.name)}</span>${r.code ? `<span class="tape">${esc(r.code)}</span>` : ''}${byCode.has(r.code) ? '<span class="chip">이미 있음</span>' : ''}</div>`); walk(r.kids || [], depth + 1); }); })(P.rows, 0);
+  return `<div class="lbprev"><div class="lbsum">새로 만들 위치 <b>${P.make}곳</b>${P.have ? ` · 이미 있는 ${P.have}곳은 그대로 둡니다` : ''}</div>${lines.join('')}${P.make + P.have > 40 ? '<div class="lbline muted">…</div>' : ''}</div>`;
+}
+
+/* 재고 실사: 위치마다 적던 수량을 기기에 잠시 저장해 둔다 (다른 화면에 다녀와도 그대로) */
+const COUNT_KEY = 'gaya-count';
+const countAll = () => S.count || (S.count = store.get(COUNT_KEY, {}) || {});
+const countState = loc => { const a = countAll(); return a[loc] || (a[loc] = { vals: {}, added: [] }); };
+const countSaveLocal = () => store.set(COUNT_KEY, countAll());
+const qtyAt = (item, loc) => ((S.ix.byItem.get(item) || []).find(x => x.location_id === loc) || {}).qty || 0;
+function countIds(loc) { const c = countState(loc); return [...new Set([...(S.ix.byLoc.get(loc) || []).map(x => x.item_id), ...c.added])].filter(id => S.ix.item.has(id)); }
+function countChanges(loc) {
+  const c = countState(loc); const out = [], bad = [];
+  countIds(loc).forEach(id => { const v = c.vals[id]; if (v == null || String(v).trim() === '') return; if (!isInt(v)) bad.push(id); else if (+v !== qtyAt(id, loc)) out.push({ item_id: id, qty: +v }); });
+  return { out, bad };
+}
+function countAdd(loc, id) { const c = countState(loc); if (!c.added.includes(id)) c.added.push(id); if (c.vals[id] == null) c.vals[id] = ''; countSaveLocal(); }
+function updateCountBar() { const r = route(); if (r.view !== 'count') return; const { out } = countChanges(r.node); const b = $('#cnt-sum'); if (b) b.textContent = out.length ? `바뀐 품목 ${out.length}개` : '바뀐 품목 없음'; const sv = $('#cnt-save'); if (sv) sv.disabled = !out.length; }
+
+/* 발주 목록 */
+function orderInit() { S.order = { rows: S.cache.items.filter(isLow).map(it => ({ id: it.id, qty: Math.max(1, it.min_qty - total(it.id)), on: true, low: true })) }; }
+const orderRows = () => (S.order ? S.order.rows : []).filter(r => S.ix.item.has(r.id));
+function orderText() {
+  const rows = orderRows().filter(r => r.on && r.qty > 0); const groups = new Map();
+  rows.forEach(r => { const it = S.ix.item.get(r.id); const k = it.maker || '제조사 미정'; if (!groups.has(k)) groups.set(k, []); groups.get(k).push(`- ${itemTitle(it)} ${r.qty}${it.unit}`); });
+  const n = new Date();
+  return `[가야엘리베이터 자재 발주] ${n.getMonth() + 1}/${n.getDate()} (${'일월화수목금토'[n.getDay()]})\n` + [...groups].map(([k, v]) => `■ ${k}\n${v.join('\n')}`).join('\n') + `\n총 ${rows.length}품목`;
+}
+
+/* ───────── 폰에 저장한 자료 (기계실·피트처럼 전파가 약한 곳에서 보기) ───────── */
+const OFF_KEY = 'gaya-offline', OFF_CACHE = 'gaya-docs', OFF_URL = id => 'https://gaya-offline.local/doc/' + id;
+const OFF_MEM = new Map(); // 기기 저장소를 못 쓰는 곳(체험판 미리보기 등)에서는 잠시 기억만
+const offList = () => store.get(OFF_KEY, {}) || {};
+const offInfo = id => offList()[id] || null;
+const offOK = d => !!d && d.kind === 'file' && !(d.size > 50 * 1048576); // 폰에 저장할 수 있는 자료 (파일, 50MB 까지)
+const offView = d => !!d && ['pdf', 'img'].includes(fileKind(d.name, d.kind)[0]); // 앱 안에서 바로 그려 보이는 종류
+const offTotal = () => Object.values(offList()).reduce((a, x) => a + (x.size || 0), 0);
+async function offPut(id, blob) { try { const c = await caches.open(OFF_CACHE); await c.put(OFF_URL(id), new Response(blob, { headers: { 'Content-Type': blob.type || 'application/octet-stream' } })); OFF_MEM.delete(id); } catch { OFF_MEM.set(id, blob); } }
+async function offGet(id) { try { const c = await caches.open(OFF_CACHE); const r = await c.match(OFF_URL(id)); if (r) return await r.blob(); } catch {} return OFF_MEM.get(id) || null; }
+async function offDel(id) { const l = offList(); delete l[id]; store.set(OFF_KEY, l); OFF_MEM.delete(id); if (S.viewer && S.viewer.id === id) closeViewer(); try { const c = await caches.open(OFF_CACHE); await c.delete(OFF_URL(id)); } catch {} }
+function offPrune() { if (!S.ix || !online()) return; Object.keys(offList()).forEach(id => { if (!S.ix.doc.has(id)) offDel(id); }); }
+async function saveOffline(id) {
+  const d = S.ix.doc.get(id); if (!offOK(d)) return;
+  if (!online()) return note('오프라인이라 지금은 폰에 저장할 수 없습니다. 연결되면 다시 누르세요.');
+  S.offBusy = S.offBusy || {}; if (S.offBusy[id] != null) return;
+  S.offBusy[id] = 0; render();
+  try {
+    const blob = await S.api.docFile(id, f => { S.offBusy[id] = f; progress(`폰에 저장하는 중 ${Math.round(f * 100)}% · ${d.name}`); });
+    await offPut(id, blob);
+    const l = offList(); l[id] = { size: blob.size, at: Date.now(), type: blob.type }; store.set(OFF_KEY, l);
+    try { if (navigator.storage && navigator.storage.persist) navigator.storage.persist(); } catch {}
+    if (!favs().has(id)) { const fs = favs(); fs.add(id); store.set(favKey(), [...fs]); }
+    if (fileKind(d.name, d.kind)[0] === 'pdf') loadPdfLib().catch(() => {}); // 전파 없는 곳에서도 PDF 를 그릴 수 있게 미리 받아 둔다
+    progress(null); note(offView(d) ? '폰에 저장했습니다 · 전파가 없어도 열립니다' : '폰에 저장했습니다 · 전파가 없어도 「파일 열기」로 휴대폰 앱에서 엽니다');
+  } catch (e) { progress(null); toast(isNet(e) ? NET_MSG : e.message, true); }
+  delete S.offBusy[id]; render();
+}
+
+/* 내 저장함 폴더 (사람·기기마다, 서버에는 저장하지 않음) */
+const myKey = () => 'gaya-myfold-' + (S.user ? S.user.id : '');
+const myData = () => { const d = store.get(myKey(), null) || {}; d.folders = d.folders || []; d.place = d.place || {}; return d; };
+const mySave = d => store.set(myKey(), d);
+const myIds = () => [...favs()].filter(id => S.ix && S.ix.doc.has(id));
+const myKids = (md, pid) => md.folders.filter(f => (f.parent || null) === (pid || null)).sort((a, b) => a.name.localeCompare(b.name, 'ko', { numeric: true }));
+const myPath = (md, id) => { const out = []; let f = md.folders.find(x => x.id === id); while (f) { out.unshift(f); f = md.folders.find(x => x.id === f.parent); } return out; };
+const myPlace = (md, docId) => md.folders.some(f => f.id === md.place[docId]) ? md.place[docId] : null;
+const myDocsIn = (md, fid) => myIds().filter(id => myPlace(md, id) === (fid || null)).map(id => S.ix.doc.get(id)).sort((a, b) => a.name.localeCompare(b.name, 'ko', { numeric: true }));
+function flatMy(md, pid = null, depth = 0, out = []) { myKids(md, pid).forEach(n => { out.push({ n, depth }); flatMy(md, n.id, depth + 1, out); }); return out; }
+
+/* PDF 보기 도구 (필요할 때만 받는다. 실제 앱은 앱 안 vendor 폴더, 체험판은 cdnjs) */
+let pdfLibP = null;
+function loadPdfLib() {
+  if (window.pdfjsLib) return Promise.resolve(window.pdfjsLib);
+  if (pdfLibP) return pdfLibP;
+  if (document.getElementById('pdfjs-main')) { // 체험판: 도구를 페이지 안에 담아 두었다 (바깥 주소를 쓰지 않고 이 화면 안에서 그린다)
+    pdfLibP = new Promise((res, rej) => {
+      try { ['pdfjs-worker', 'pdfjs-main'].forEach(id => { const sc = document.createElement('script'); sc.textContent = document.getElementById(id).textContent; document.head.appendChild(sc); }); if (!window.pdfjsLib) throw new Error('x'); res(window.pdfjsLib); }
+      catch { pdfLibP = null; rej(new Error('PDF 보기 도구를 불러오지 못했습니다.')); }
+    });
+    return pdfLibP;
+  }
+  const base = window.PDFJS_BASE || (DEMO ? 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/' : 'vendor/');
+  pdfLibP = new Promise((res, rej) => {
+    const sc = document.createElement('script'); sc.src = base + 'pdf.min.js';
+    sc.onload = () => { if (!window.pdfjsLib) { pdfLibP = null; return rej(new Error('PDF 보기 도구를 불러오지 못했습니다.')); } pdfjsLib.GlobalWorkerOptions.workerSrc = base + 'pdf.worker.min.js'; res(pdfjsLib); };
+    sc.onerror = () => { pdfLibP = null; sc.remove(); rej(new Error('PDF 보기 도구를 불러오지 못했습니다. 인터넷에 한 번 연결된 상태에서 이 자료를 열어 두면 다음부터는 전파 없이도 열립니다.')); };
+    document.head.appendChild(sc);
+  });
+  if (!DEMO && /^https?:/.test(location.protocol)) fetch(base + 'pdf.worker.min.js').catch(() => {});
+  return pdfLibP;
+}
+/* 저장본 보기: 화면을 다시 그려도 PDF 를 다시 그리지 않도록 보기 칸을 따로 들고 있다가 끼워 넣는다 */
+function closeViewer() { const v = S.viewer; S.viewer = null; if (!v) return; try { v.io && v.io.disconnect(); v.pdf && v.pdf.destroy(); v.url && URL.revokeObjectURL(v.url); } catch {} }
+function afterRender() {
+  const slot = $('#offview'); if (!slot) return;
+  const id = slot.dataset.id;
+  if (S.viewer && S.viewer.id === id) { if (S.viewer.el.parentNode !== slot) slot.replaceChildren(S.viewer.el); return; }
+  closeViewer();
+  const el = document.createElement('div'); el.className = 'pdfpages'; el.innerHTML = `<div class="viewer-page">${ic('docs')}<div>폰에 저장된 파일을 여는 중…</div></div>`;
+  const v = S.viewer = { id, el }; slot.replaceChildren(el);
+  (async () => {
+    const blob = await offGet(id);
+    if (S.viewer !== v) return;
+    if (!blob) { el.innerHTML = `<div class="viewer-page">${ic('warn')}<div>폰에 저장된 파일이 지워졌습니다.<br>인터넷이 될 때 다시 저장하세요.</div></div>`; const l = offList(); delete l[id]; store.set(OFF_KEY, l); return; }
+    if ((blob.type || '').startsWith('image/')) { v.url = URL.createObjectURL(blob); el.innerHTML = `<img src="${v.url}" alt="" style="display:block;width:100%">`; return; }
+    try {
+      const lib = await loadPdfLib(); const pdf = v.pdf = await lib.getDocument({ data: new Uint8Array(await blob.arrayBuffer()) }).promise;
+      if (S.viewer !== v) { pdf.destroy(); return; }
+      const first = await pdf.getPage(1); const vp1 = first.getViewport({ scale: 1 });
+      el.innerHTML = Array.from({ length: pdf.numPages }, (_, i) => `<div class="pg" data-p="${i + 1}" style="aspect-ratio:${vp1.width}/${vp1.height}"><span>${i + 1}</span></div>`).join('') + `<div class="pgnote">${pdf.numPages}쪽 · 두 손가락으로 벌리면 크게 보입니다</div>`;
+      const draw = async box => {
+        if (box.dataset.done) return; box.dataset.done = '1';
+        const pg = await pdf.getPage(+box.dataset.p); const vp = pg.getViewport({ scale: 1 });
+        const w = Math.min(2200, Math.round((box.clientWidth || 360) * Math.min(3, (window.devicePixelRatio || 1) * 1.5)));
+        const sv = pg.getViewport({ scale: w / vp.width }); const c = document.createElement('canvas'); c.width = Math.round(sv.width); c.height = Math.round(sv.height);
+        box.style.aspectRatio = vp.width + '/' + vp.height;
+        await pg.render({ canvasContext: c.getContext('2d'), viewport: sv }).promise; box.replaceChildren(c);
+      };
+      v.io = new IntersectionObserver(es => es.forEach(e => { if (e.isIntersecting) draw(e.target).catch(() => {}); }), { rootMargin: '800px 0px' });
+      el.querySelectorAll('.pg').forEach(b => v.io.observe(b));
+    } catch (e) { if (S.viewer === v) el.innerHTML = `<div class="viewer-page">${ic('warn')}<div>${esc(/[가-힣]/.test(e && e.message || '') ? e.message : 'PDF 를 열지 못했습니다. 인터넷이 될 때 「드라이브에서 보기」로 열어 보세요.')}</div></div>`; }
+  })();
+}
+
+Object.assign(ACT, {
+  /* 담기 · 한 번에 출고 */
+  cartAdd: () => {
+    const s = S.sheet; if (!s) return; const d = s.d; const bad = m => { s.err = m; render(); };
+    if (!d.location_id) return bad('꺼내는 위치를 고르세요.');
+    if (!isInt(d.qty, 1)) return bad('수량을 1 이상의 정수로 입력하세요.');
+    const rows = cart(); const have = qtyAt(d.item_id, d.location_id);
+    const hit = rows.find(r => r.item_id === d.item_id && r.location_id === d.location_id);
+    const sum = (hit ? hit.qty : 0) + +d.qty;
+    if (sum > have) return bad(`이 위치에는 ${have}개밖에 없습니다${hit ? ` (이미 ${hit.qty}개 담음)` : ''}. 수량이나 위치를 확인하세요.`);
+    if (hit) hit.qty = sum; else rows.push({ item_id: d.item_id, location_id: d.location_id, qty: +d.qty });
+    if (siteText(d)) S.cartSite = { site: d.site, dong: d.dong, ho: d.ho };
+    saveCart(); S.sheet = null; render();
+    note(`담았습니다 · 담은 자재 ${rows.length}가지 — 아래 「한 번에 출고」를 누르면 끝납니다`);
+  },
+  cartOpen: () => { if (!cart().length) return; openSheet('cart', { ...(S.cartSite || {}) }); },
+  cartStep: d => { const s = S.sheet; if (!s) return; const i = +d.i; const r = cart()[i]; if (!r) return; const v = Math.max(1, (parseInt(s.d['cq_' + i] ?? r.qty, 10) || 0) + +d.d); s.d['cq_' + i] = String(v); r.qty = v; saveCart(); render(); },
+  cartDel: d => { const s = S.sheet; if (!s) return; cartSync(); const rows = cart(); rows.splice(+d.i, 1); Object.keys(s.d).filter(k => k.startsWith('cq_')).forEach(k => delete s.d[k]); saveCart(); if (!rows.length) { S.sheet = null; note('담은 자재를 모두 뺐습니다'); } render(); },
+  cartClear: () => { S.cart = []; saveCart(); S.cartSite = null; S.sheet = null; render(); note('담은 자재를 비웠습니다'); },
+
+  /* 한 번에 입고 (발주 목록에서) */
+  ordIn: () => {
+    const rows = orderRows().filter(r => r.on && r.qty > 0); if (!rows.length) return note('입고할 품목을 체크하고 수량을 적으세요.');
+    const d = {}; rows.forEach(r => { const best = (S.ix.byItem.get(r.id) || []).slice().sort((a, b) => b.qty - a.qty)[0]; d['rl_' + r.id] = best ? best.location_id : (S.lastRecvLoc && S.ix.loc.has(S.lastRecvLoc) ? S.lastRecvLoc : ''); });
+    openSheet('recv', d);
+  },
+  recvStep: d => { const s = S.sheet; if (!s) return; const r = orderRows().find(x => x.id === d.id); if (!r) return; const v = Math.max(1, (parseInt(s.d['rq_' + d.id] ?? r.qty, 10) || 0) + +d.d); s.d['rq_' + d.id] = String(v); r.qty = v; render(); },
+
+  /* 내 저장함 */
+  docsMode: d => { S.docsQ = ''; S.docSearchRes = null; resetStack(d.m === 'mine' ? { tab: 'docs', view: 'mine', folder: null } : { ...ROOTS.docs }); },
+  myOpen: d => { if (!d.id) return resetStack({ tab: 'docs', view: 'mine', folder: null }); const i = S.stack.findIndex(r => r.view === 'mine' && r.folder === d.id); if (i >= 0) { S.stack = S.stack.slice(0, i + 1); render(); window.scrollTo(0, 0); } else nav({ tab: 'docs', view: 'mine', folder: d.id }); },
+  myMkdir: () => openSheet('myFolder', { parent: route().view === 'mine' ? route().folder || null : null }),
+  myMkdirHere: () => { const s = S.sheet; if (!s) return; openSheet('myFolder', { parent: null, thenMove: s.d.id }); },
+  myRename: d => { const f = myData().folders.find(x => x.id === d.id); if (f) openSheet('myFolder', { id: f.id, name: f.name }); },
+  myDelFolder: d => { const md = myData(); const f = md.folders.find(x => x.id === d.id); if (!f) return; ask(`「${f.name}」 폴더를 지울까요?`, '안에 있던 자료와 폴더는 한 칸 위로 옮겨집니다. 자료는 지워지지 않습니다.', 'myDelFolder', { id: f.id, ok: '폴더 지우기', danger: true }); },
+  myDocMenu: d => openSheet('myDocMenu', { id: d.id }),
+  myMoveOpen: d => openSheet('myMove', { id: d.id, target: myPlace(myData(), d.id) }),
+  myRemove: d => { S.sheet = null; ACT.fav({ id: d.id }); },
+  mySaveAll: async () => { for (const id of myIds()) { const doc = S.ix.doc.get(id); if (offOK(doc) && !offInfo(id) && online()) await saveOffline(id); } },
+
+  /* 위치 한 번에 만들기 */
+  locBulk: () => openSheet('locBulk', { zone: null, utype: '선반', from: '1', to: '4', slots: '' }),
+  lbType: d => { const s = S.sheet; if (!s) return; s.d.utype = d.v; render(); },
+  lbSlots: d => { const s = S.sheet; if (!s) return; s.d.slots = d.v; render(); },
+
+  /* 현장별 사용 이력 */
+  sites: () => { S.sitesQ = ''; nav({ tab: 'items', view: 'sites' }); },
+  site: d => { const r = route(); if (r.view === 'site' && r.name === d.v) return; S.siteHo = ''; toItemsTab(); nav({ tab: 'items', view: 'site', name: d.v }); },
+  siteHo: d => { S.siteHo = d.v; render(); },
+
+  /* 재고 실사 */
+  countOpen: d => nav({ tab: 'items', view: 'count', node: d.id }),
+  cntStep: d => { const loc = route().node; const c = countState(loc); const cur = c.vals[d.id]; const base = isInt(cur) ? +cur : qtyAt(d.id, loc); c.vals[d.id] = String(Math.max(0, base + +d.d)); countSaveLocal(); render(); },
+  cntAdd: d => { countAdd(route().node, d.id); S.cntQ = ''; const qi = $('#q-cnt'); if (qi) qi.value = ''; render(); const el = document.getElementById('cnt-' + d.id); if (el) el.focus(); },
+  cntNewItem: () => openSheet('item', { unit: '개', countLoc: route().node }),
+  cntReset: () => { const a = countAll(); delete a[route().node]; countSaveLocal(); render(); note('실사하던 수량을 처음대로 돌렸습니다'); },
+  cntSave: () => {
+    const loc = route().node; const { out, bad } = countChanges(loc);
+    if (bad.length) return toast(itemTitle(S.ix.item.get(bad[0])) + ': 수량을 0 이상의 정수로 적으세요.', true);
+    if (!out.length) return note('바뀐 수량이 없습니다.');
+    const c = countState(loc); c.op = c.op || opId(); countSaveLocal();
+    run(() => S.api.stockCount({ location_id: loc, rows: out, reason: '실사', op_id: c.op }), n => `${n}개 품목 수량을 맞췄습니다 · 활동 기록에 「수량 정정(실사)」으로 남습니다`).then(ok => { if (ok === false) return; const a = countAll(); delete a[loc]; countSaveLocal(); render(); });
+  },
+  cntNext: () => { S.countNext = true; goTab('scan'); note('다음 선반의 QR을 찍으면 바로 실사 화면이 열립니다'); },
+
+  /* 발주 목록 */
+  order: () => { if (!S.order) orderInit(); nav({ tab: 'items', view: 'order' }); },
+  ordReset: () => { orderInit(); render(); note('재고 부족 품목으로 다시 채웠습니다'); },
+  ordToggle: (d, el) => { const r = orderRows().find(x => x.id === d.id); if (r) r.on = el.checked; setTimeout(render, 0); },
+  ordStep: d => { const r = orderRows().find(x => x.id === d.id); if (!r) return; r.qty = Math.max(0, (r.qty || 0) + +d.d); render(); },
+  ordAdd: d => { if (!S.order) orderInit(); if (!S.order.rows.some(r => r.id === d.id)) S.order.rows.push({ id: d.id, qty: 1, on: true }); S.ordQ = ''; const qi = $('#q-ord'); if (qi) qi.value = ''; render(); },
+  ordDel: d => { S.order.rows = S.order.rows.filter(r => r.id !== d.id); render(); },
+  ordShare: () => { if (!orderRows().some(r => r.on && r.qty > 0)) return note('보낼 품목이 없습니다. 수량을 적거나 체크하세요.'); shareOut('발주 목록', orderText()); },
+  ordCsv: () => {
+    const rows = orderRows().filter(r => r.on && r.qty > 0); if (!rows.length) return note('보낼 품목이 없습니다.');
+    const n = new Date();
+    downloadCSV(`가야자재_발주_${ymd(n)}.csv`, [['제조사', '품명', '규격', '발주 수량', '단위', '지금 재고', '최소 재고'], ...rows.map(r => { const it = S.ix.item.get(r.id); return [it.maker || '', it.name, it.spec || '', r.qty, it.unit, total(it.id), it.min_qty]; })]);
+    if (DEMO) note('체험판 화면에서는 파일이 안 받아질 수 있습니다. 실제 앱에서는 바로 받아집니다.'); else toast('발주 목록을 엑셀 파일로 받았습니다');
+  },
+
+  /* 자료: 폰에 저장 · 파일 받기 */
+  offSave: d => { const s = favs(); if (!s.has(d.id)) { s.add(d.id); store.set(favKey(), [...s]); } saveOffline(d.id); },
+  driveView: d => { S.driveView = S.driveView || {}; S.driveView[d.id] = !S.driveView[d.id]; render(); },
+  docDownload: async d => {
+    const doc = S.ix.doc.get(d.id); if (!doc) return;
+    if (DEMO) return note('체험판 화면에서는 파일이 받아지지 않습니다. 실제 앱에서는 폰의 「다운로드」에 저장됩니다.');
+    let blob = offInfo(d.id) ? await offGet(d.id) : null;
+    if (!blob) {
+      if (!online()) return toast('오프라인이라 받을 수 없습니다. 연결되면 다시 누르세요.', true);
+      try { blob = await S.api.docFile(d.id, f => progress(`파일 받는 중 ${Math.round(f * 100)}% · ${doc.name}`)); progress(null); }
+      catch (e) { progress(null); return toast(isNet(e) ? NET_MSG : e.message, true); }
+    }
+    downloadBlob(doc.name, blob); toast('파일을 받았습니다 · 폰의 「다운로드」(아이폰은 「파일」 앱)에서 열 수 있습니다');
+  },
+  offClear: () => ask('폰에 저장한 자료를 모두 지울까요?', `${Object.keys(offList()).length}개 · ${fmtSize(offTotal())} · 즐겨찾기는 그대로 두고 폰에 저장한 파일만 지웁니다. 다시 열 때는 인터넷이 필요합니다.`, 'offClear', { ok: '지우기', danger: true }),
+
+  /* 사용 통계 · 최소 재고 추천 */
+  stats: () => nav({ tab: 'more', view: 'stats', month: thisMonth() }),
+  statsMonth: d => { const r = route(); const m = shiftMonth(r.month, +d.d); if (m > thisMonth()) return; nav({ ...r, month: m }, true); },
+  minToggle: (d, el) => { S.minOff = S.minOff || new Set(); el.checked ? S.minOff.delete(d.id) : S.minOff.add(d.id); setTimeout(render, 0); },
+  minApply: () => {
+    const rows = (vd().recs || []).filter(x => !(S.minOff && S.minOff.has(x.id))).map(x => ({ id: x.id, min_qty: x.rec }));
+    if (!rows.length) return note('반영할 품목을 체크하세요.');
+    ask(`최소 재고 ${rows.length}개를 바꿀까요?`, '추천한 값으로 바꿉니다. 품목 화면에서 언제든 다시 고칠 수 있고, 활동 기록에 남습니다.', 'minApply', { rows, ok: rows.length + '개 바꾸기' });
+  },
+  poster: () => nav({ tab: 'more', view: 'poster' }),
+  shareApp: () => { const url = CONFIG.APP_URL || (DEMO ? 'https://gaya-elevator.github.io/' : location.origin + location.pathname);
+    shareOut('앱 주소 보내기', `[가야엘리베이터] 자재·자료 앱\n아래 주소를 누르면 열립니다.\n${url}\n① 「가입 신청」에서 사내번호·이름·비밀번호를 적고, 관리자가 승인하면 바로 씁니다.\n② 홈 화면에 추가해 두면 앱처럼 아이콘으로 열립니다.`); },
+  printPoster: () => { if (DEMO) return note('체험판 화면에서는 인쇄 창이 열리지 않습니다. 실제 앱에서는 바로 인쇄되고, 인쇄 창에서 「PDF로 저장」도 됩니다.'); document.body.classList.add('print-poster'); window.print(); setTimeout(() => document.body.classList.remove('print-poster'), 500); }
+});
+Object.assign(CONFIRM, {
+  offClear: async () => { S.sheet = null; for (const id of Object.keys(offList())) await offDel(id); render(); note('폰에 저장한 자료를 지웠습니다'); },
+  minApply: d => run(() => S.api.itemsMinSet(d.rows, d.op_id), n => `${n}개 품목의 최소 재고를 바꿨습니다`).then(ok => { if (ok !== false) { S.minOff = null; } }),
+  myDelFolder: d => { const md = myData(); const f = md.folders.find(x => x.id === d.id); S.sheet = null; if (!f) return render();
+    md.folders.forEach(x => { if (x.parent === f.id) x.parent = f.parent || null; });
+    Object.keys(md.place).forEach(k => { if (md.place[k] === f.id) { if (f.parent) md.place[k] = f.parent; else delete md.place[k]; } });
+    md.folders = md.folders.filter(x => x.id !== f.id); mySave(md);
+    if (route().view === 'mine' && route().folder === f.id) { S.stack.pop(); if (!S.stack.length) S.stack = [{ tab: 'docs', view: 'mine', folder: null }]; }
+    render(); toast('폴더를 지웠습니다 · 안의 자료는 위로 옮겼습니다'); }
+});
 
 /* 로그인 뒤: 기본 자료를 받고 첫 화면을 연다. keepNav 면 보고 있던 화면을 그대로 둔다 (오프라인 저장본으로 먼저 연 경우) */
 async function afterLogin({ keepNav = false } = {}) {
