@@ -10,7 +10,7 @@ const CONFIG = Object.assign({
   STORAGE_WARN: 0.8
 }, window.GAYA_CONFIG || {});
 const DEMO = !CONFIG.SUPABASE_URL;
-const APP_VER = '12fefbf9';
+const APP_VER = 'b21fab09';
 
 /* ───────── 작은 도구들 ───────── */
 const $ = (s, r = document) => r.querySelector(s);
@@ -43,6 +43,27 @@ function applyTheme(t) {
 }
 const themeNow = () => { const t = store.get(THEME_KEY, 'auto'); return t === 'light' || t === 'dark' ? t : 'auto'; };
 if (!DEMO || store.get(THEME_KEY, null)) applyTheme(themeNow());
+/* 글자 크기: 보통 / 크게 (화면 전체를 한 단계 키운다) */
+/* 알림 창 켜기·끄기 (이 기기에만 저장). done: 저장 완료 알림, undo: 되돌리기 버튼, install: 홈 화면 추가 안내 상자 */
+const PREF_KEY = 'gaya-pref';
+const PREF_DEF = { done: true, undo: true, install: true };
+const pref = k => { const p = store.get(PREF_KEY, {}) || {}; return k in p ? !!p[k] : PREF_DEF[k]; };
+const setPref = (k, v) => { const p = store.get(PREF_KEY, {}) || {}; p[k] = !!v; store.set(PREF_KEY, p); };
+const SIZE_KEY = 'gaya-size';
+const sizeNow = () => store.get(SIZE_KEY, 'md') === 'lg' ? 'lg' : 'md';
+function applySize(v) { if (v === 'lg') document.documentElement.setAttribute('data-size', 'lg'); else document.documentElement.removeAttribute('data-size'); }
+applySize(sizeNow());
+/* 휴대폰 종류·설치 상태 */
+const isIOS = () => /iPhone|iPad|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+const isStandalone = () => (window.matchMedia && matchMedia('(display-mode: standalone)').matches) || navigator.standalone === true;
+/* 파일 내려받기 (엑셀에서 바로 열리는 CSV: 한글이 깨지지 않게 BOM 을 붙인다) */
+const csvCell = v => { const t = String(v ?? ''); return /[",\n\r]/.test(t) ? '"' + t.replace(/"/g, '""') + '"' : t; };
+function downloadCSV(name, rows) {
+  const text = '\uFEFF' + rows.map(r => r.map(csvCell).join(',')).join('\r\n');
+  const url = URL.createObjectURL(new Blob([text], { type: 'text/csv;charset=utf-8' }));
+  const a = document.createElement('a'); a.href = url; a.download = name; document.body.appendChild(a); a.click();
+  setTimeout(() => { URL.revokeObjectURL(url); a.remove(); }, 1500);
+}
 const pad = n => String(n).padStart(2, '0');
 /* 서버 시각 문자열을 날짜로 — 아이폰 사파리는 "2026-10-01 03:00:00.123456+00" 같은 형식을 못 읽는다 */
 function toDate(v) {
@@ -162,6 +183,15 @@ const P = {
   logout: '<path d="M14 4h5v16h-5M10 8l-4 4 4 4M6 12h10"/>',
   restore: '<path d="M4 12a8 8 0 1 0 2.4-5.7L4 8.5"/><path d="M4 4v4.5h4.5"/>',
   sort: '<path d="M7 4v16M4 17l3 3 3-3M17 20V4M14 7l3-3 3 3"/>',
+  star: '<path d="m12 3.5 2.6 5.3 5.9.9-4.3 4.1 1 5.8-5.2-2.7-5.2 2.7 1-5.8-4.3-4.1 5.9-.9z"/>',
+  starOn: '<path d="m12 3.5 2.6 5.3 5.9.9-4.3 4.1 1 5.8-5.2-2.7-5.2 2.7 1-5.8-4.3-4.1 5.9-.9z" fill="currentColor"/>',
+  share: '<circle cx="18" cy="5.5" r="2.5"/><circle cx="6" cy="12" r="2.5"/><circle cx="18" cy="18.5" r="2.5"/><path d="m8.2 10.8 7.6-4.1M8.2 13.2l7.6 4.1"/>',
+  download: '<path d="M12 4v11M7.5 10.5 12 15l4.5-4.5"/><path d="M5 19h14"/>',
+  textsize: '<path d="M3 19 8 6l5 13M4.8 14.5h6.4M14.5 19l3.3-8.5 3.2 8.5M15.6 16.2h4.4"/>',
+  phone: '<rect x="7" y="2.5" width="10" height="19" rx="2"/><path d="M11 18.5h2"/>',
+  iosShare: '<path d="M12 3.5v11M8.5 7 12 3.5 15.5 7"/><path d="M8 10H6v10h12V10h-2"/>',
+  clock: '<circle cx="12" cy="12" r="8.5"/><path d="M12 7.5V12l3 2"/>',
+  history: '<path d="M4 12a8 8 0 1 0 2.4-5.7L4 8.5"/><path d="M4 4v4.5h4.5M12 8v4l2.8 1.8"/>',
   sun: '<circle cx="12" cy="12" r="4"/><path d="M12 2.5v2M12 19.5v2M2.5 12h2M19.5 12h2M5.3 5.3l1.4 1.4M17.3 17.3l1.4 1.4M5.3 18.7l1.4-1.4M17.3 6.7l1.4-1.4"/>',
   moon: '<path d="M20 14.5A8 8 0 0 1 9.5 4a8 8 0 1 0 10.5 10.5z"/>',
   contrast: '<circle cx="12" cy="12" r="8.5"/><path d="M12 3.5v17a8.5 8.5 0 0 0 0-17z" fill="currentColor"/>',
@@ -290,10 +320,11 @@ function makeDemoAPI() {
         docs: D.docs.filter(x => !x.deleted_at).map(d => { const c = { ...d }; delete c.dataurl; return c; })
       });
     },
-    async txList({ item_id, location_id, limit = 50 } = {}) {
+    async txList({ item_id, location_id, user_id, limit = 50 } = {}) {
       await tick();
-      return clone(D.tx.filter(t => (!item_id || t.item_id === item_id) && (!location_id || t.from_loc === location_id || t.to_loc === location_id)).slice(0, limit));
+      return clone(D.tx.filter(t => (!item_id || t.item_id === item_id) && (!user_id || t.user_id === user_id) && (!location_id || t.from_loc === location_id || t.to_loc === location_id)).slice(0, limit));
     },
+    async txRange({ from, to }) { await tick(); return clone(D.tx.filter(t => t.created_at >= from && t.created_at < to)); },
 
     /* 입출고 — 서버에서는 한 번의 트랜잭션 함수로 처리된다 */
     async stockIn({ item_id, location_id, qty, note, op_id }) {
@@ -303,9 +334,9 @@ function makeDemoAPI() {
       if (!location_id) fail('넣을 위치를 고르세요.');
       stockRow(item_id, location_id).qty += qty;
       const it = byId(D.items, item_id);
-      D.tx.unshift({ id: uid('t'), op_id, type: 'in', item_id, from_loc: null, to_loc: location_id, qty, site: '', note: note || '', user_id: u.id, created_at: now() });
+      const tid = uid('t'); D.tx.unshift({ id: tid, op_id, type: 'in', item_id, from_loc: null, to_loc: location_id, qty, site: '', note: note || '', user_id: u.id, created_at: now() });
       log('입고', 'item', item_id, itemLabel(it) + ' ' + qty + it.unit + ' → ' + locPath(location_id));
-      save();
+      save(); return tid;
     },
     async stockOut({ item_id, location_id, qty, site, note, op_id }) {
       await tick(); const u = need('stock');
@@ -315,9 +346,9 @@ function makeDemoAPI() {
       if (r.qty < qty) fail('이 위치에는 ' + r.qty + '개밖에 없습니다. 수량이나 위치를 확인하세요.');
       const before = totalOf(item_id); r.qty -= qty;
       const it = byId(D.items, item_id);
-      D.tx.unshift({ id: uid('t'), op_id, type: 'out', item_id, from_loc: location_id, to_loc: null, qty, site: site || '', note: note || '', user_id: u.id, created_at: now() });
+      const tid = uid('t'); D.tx.unshift({ id: tid, op_id, type: 'out', item_id, from_loc: location_id, to_loc: null, qty, site: site || '', note: note || '', user_id: u.id, created_at: now() });
       log('출고', 'item', item_id, itemLabel(it) + ' ' + qty + it.unit + ' ← ' + locPath(location_id) + (site ? ' / ' + site : ''));
-      lowCheck(item_id, before); save();
+      lowCheck(item_id, before); save(); return tid;
     },
     async stockMove({ item_id, from, to, qty, note, op_id }) {
       await tick(); const u = need('stock');
@@ -329,9 +360,9 @@ function makeDemoAPI() {
       if (a.qty < qty) fail('보내는 위치에 ' + a.qty + '개밖에 없습니다.');
       a.qty -= qty; stockRow(item_id, to).qty += qty;
       const it = byId(D.items, item_id);
-      D.tx.unshift({ id: uid('t'), op_id, type: 'move', item_id, from_loc: from, to_loc: to, qty, site: '', note: note || '', user_id: u.id, created_at: now() });
+      const tid = uid('t'); D.tx.unshift({ id: tid, op_id, type: 'move', item_id, from_loc: from, to_loc: to, qty, site: '', note: note || '', user_id: u.id, created_at: now() });
       log('이동', 'item', item_id, itemLabel(it) + ' ' + qty + it.unit + ' ' + locPath(from) + ' → ' + locPath(to));
-      save();
+      save(); return tid;
     },
     async stockCancel({ tx_id, op_id }) {
       await tick(); const u = me();
@@ -755,7 +786,7 @@ function makeLiveAPI() {
     const { data: { session } } = await sb.auth.getSession();
     let r;
     try { r = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' }, body: JSON.stringify({ token: session && session.access_token, action, ...payload }) }); }
-    catch { throw netErr(); }
+    catch { if (!navigator.onLine) throw netErr(); throw new Error('자료 저장소(구글 드라이브)에 연결되지 않습니다. 잠시 뒤 다시 해 보고, 계속되면 관리자에게 알려 주세요.'); }
     const j = await r.json().catch(() => ({ ok: false, error: '자료 저장소 응답을 읽지 못했습니다. 잠시 뒤 다시 시도하세요.' }));
     if (!j.ok) throw new Error(j.error || '저장소 작업 실패');
     return j;
@@ -835,12 +866,14 @@ function makeLiveAPI() {
       ]);
       return { locations, categories, items, stock, people, folders, docs };
     },
-    async txList({ item_id, location_id, limit = 50 } = {}) {
+    async txList({ item_id, location_id, user_id, limit = 50 } = {}) {
       let x = sb.from('tx').select('*').order('created_at', { ascending: false }).limit(limit);
       if (item_id) x = x.eq('item_id', item_id);
+      if (user_id) x = x.eq('user_id', user_id);
       if (location_id) x = x.or(`from_loc.eq.${location_id},to_loc.eq.${location_id}`);
       return q(x);
     },
+    txRange: ({ from, to }) => all('tx', '*', x => x.gte('created_at', from).lt('created_at', to).order('created_at', { ascending: false })),
     async txToday() {
       const t = new Date(); t.setHours(0, 0, 0, 0);
       const { count, error } = await sb.from('tx').select('id', { count: 'exact', head: true }).gte('created_at', t.toISOString()).in('type', ['in', 'out', 'move']);
@@ -1039,11 +1072,13 @@ async function onEnterRoute() {
   if (r.view === 'scan') { startScan(); return; }
   if (r.tab === 'items' && r.view === 'browse' && S.q.trim() && !S.searchRes) searchItems(true);
   if (r.tab === 'docs' && r.view === 'browse' && S.docsQ.trim() && !S.docSearchRes) searchDocs(true);
+  if (r.view === 'doc') rememberDoc(r.id);
   if (!online()) return; // 오프라인: 받아 둔 기본 자료만 보여 준다 (기록·댓글 칸에는 안내가 뜬다)
   try {
     if (r.view === 'item') { const [tx, cm] = await Promise.all([S.api.txList({ item_id: r.id }), S.api.comments('item', r.id)]); VIEWDATA[key] = { tx, cm }; }
-    else if (r.tab === 'items' && r.view === 'browse' && !r.node) { const [tx, today] = await Promise.all([S.api.txList({ limit: 6 }), S.api.txToday().catch(() => null)]); VIEWDATA[key] = { tx, today }; }
-    else if (r.view === 'doc') VIEWDATA[key] = { cm: await S.api.comments('doc', r.id), data: await S.api.docData(r.id) };
+    else if (r.tab === 'items' && r.view === 'browse' && !r.node) { const [tx, today, mine] = await Promise.all([S.api.txList({ limit: 6 }), S.api.txToday().catch(() => null), S.api.txList({ user_id: S.user.id, limit: 60 }).catch(() => [])]); VIEWDATA[key] = { tx, today, mine }; }
+    else if (r.view === 'history') { const [y, m] = r.month.split('-').map(Number); VIEWDATA[key] = { list: await S.api.txRange({ from: new Date(y, m - 1, 1).toISOString(), to: new Date(y, m, 1).toISOString() }) }; }
+    else if (r.view === 'doc') { VIEWDATA[key] = { cm: await S.api.comments('doc', r.id), data: await S.api.docData(r.id) }; }
     else if (r.view === 'list') { VIEWDATA[key] = { list: await S.api.notifications() }; }
     else if (r.view === 'users') VIEWDATA[key] = { list: await S.api.users() };
     else if (r.view === 'log') VIEWDATA[key] = { list: await S.api.audit({ kind: S.logKind }) };
@@ -1063,11 +1098,19 @@ const loadingBox = (icon = 'list') => !online() ? empty('wifioff', '오프라인
 
 /* ───────── 알림 띠 (화면 전체를 다시 그리지 않는다) ───────── */
 let toastTimer;
-function drawToast() { const t = $('#toast'); if (t) t.innerHTML = S.toast ? `<div class="toast ${S.toast.err ? 'err' : ''} ${S.sheet ? 'top' : ''}" role="status">${esc(S.toast.msg)}</div>` : ''; }
-function toast(msg, err = false) {
-  S.toast = { msg, err }; drawToast();
-  clearTimeout(toastTimer); toastTimer = setTimeout(() => { S.toast = null; drawToast(); }, err ? 4500 : 2600);
+function drawToast() {
+  const t = $('#toast'); if (!t) return;
+  const x = S.toast; if (!x) { t.innerHTML = ''; return; }
+  const pos = S.sheet ? 'top' : $('.fab') ? 'up' : '';
+  t.innerHTML = `<div class="toast ${x.err ? 'err' : ''} ${pos} ${x.act ? 'has-act' : ''}" role="status"><span>${esc(x.msg)}</span>${x.act ? `<button class="tact" data-act="toastAct">${esc(x.act.label)}</button>` : ''}</div>`;
 }
+/* 알림 띠. 빨간 알림(err)과 꼭 필요한 안내(must)는 늘 띄우고, 나머지는 더보기 › 알림 창 설정의 「저장 완료 알림」을 따른다 */
+function toast(msg, err = false, act = null, must = false) {
+  if (!err && !must && !act && !pref('done')) return;
+  S.toast = { msg, err, act }; drawToast();
+  clearTimeout(toastTimer); toastTimer = setTimeout(() => { S.toast = null; drawToast(); }, act ? 8000 : err ? 4500 : Math.min(6000, Math.max(2600, String(msg).length * 70)));
+}
+const note = msg => toast(msg, false, null, true);
 function progress(msg) { clearTimeout(toastTimer); S.toast = msg ? { msg, progress: true } : null; drawToast(); }
 
 /* ───────── 저장 작업 실행기 ─────────
@@ -1114,7 +1157,15 @@ document.addEventListener('input', e => {
   if (el.id === 'q-items') { S.q = el.value; searchItems(); }
   if (el.id === 'q-docs') { S.docsQ = el.value; searchDocs(); }
   if (el.id === 'bulk-in' && S.bulk) S.bulk.text = el.value;
+  if (el.id === 'q-hist') { S.histQ = el.value; clearTimeout(hT); hT = setTimeout(updatePane, 120); }
 });
+let hT;
+/* 자료 즐겨찾기 · 최근 본 자료 (이 기기에 저장) */
+const favKey = () => 'gaya-fav-' + (S.user ? S.user.id : '');
+const recentKey = () => 'gaya-recent-' + (S.user ? S.user.id : '');
+const favs = () => new Set(store.get(favKey(), []));
+const recentDocs = () => store.get(recentKey(), []);
+function rememberDoc(id) { store.set(recentKey(), [id, ...recentDocs().filter(x => x !== id)].slice(0, 8)); }
 document.addEventListener('change', e => {
   const el = e.target;
   if (el.dataset.bind && S.sheet && (el.tagName === 'SELECT' || el.type === 'checkbox')) { S.sheet.d[el.dataset.bind] = el.type === 'checkbox' ? el.checked : el.value; render(); }
@@ -1264,7 +1315,7 @@ const lowChip = it => isLow(it) ? `<span class="chip crit">부족 · 최소 ${it
 const searchBox = (id, val, ph, label) => `<div class="search">${ic('search')}<input id="${id}" type="search" enterkeyhint="search" placeholder="${ph}" value="${esc(val)}" aria-label="${label}" autocomplete="off"></div>`;
 
 /* 품목 목록: 같은 품명이 여러 사양이면 묶음 머리를 달아 준다 */
-function itemList(items, qtyOf, sub) {
+function itemList(items, qtyOf, sub, outLoc) {
   if (!items.length) return '';
   const groups = new Map();
   items.slice().sort((a, b) => a.name.localeCompare(b.name, 'ko') || (a.spec || '').localeCompare(b.spec || '', 'ko', { numeric: true })).forEach(it => { if (!groups.has(it.name)) groups.set(it.name, []); groups.get(it.name).push(it); });
@@ -1274,9 +1325,11 @@ function itemList(items, qtyOf, sub) {
     if (grouped) h += `<div class="group-h"><span>${esc(name)}</span><span>${arr.length}종</span></div>`;
     arr.forEach(it => {
       const q = qtyOf(it);
-      h += `<button class="lrow" data-act="item" data-id="${it.id}">
-        <div class="main"><span class="t">${esc(grouped ? (it.spec || '(규격 없음)') : itemTitle(it))}</span><span class="s">${esc([it.maker, it.models].filter(Boolean).join(' · ') || ' ')}</span>${sub ? sub(it) : ''}</div>
-        <div class="end"><span class="qty ${isLow(it) ? 'low' : ''}">${q}<small>${esc(it.unit)}</small></span>${lowChip(it)}</div></button>`;
+      const inner = `<div class="main"><span class="t">${esc(grouped ? (it.spec || '(규격 없음)') : itemTitle(it))}</span><span class="s">${esc([it.maker, it.models].filter(Boolean).join(' · ') || ' ')}</span>${sub ? sub(it) : ''}</div>
+        <div class="end"><span class="qty ${isLow(it) ? 'low' : ''}">${q}<small>${esc(it.unit)}</small></span>${lowChip(it)}</div>`;
+      h += outLoc
+        ? `<div class="lrow irow"><button class="hit" data-act="item" data-id="${it.id}">${inner}</button><button class="btn sm outbtn" data-act="outHere" data-id="${it.id}" data-loc="${outLoc}" data-write ${q ? '' : 'disabled'}>${ic('out')}꺼내기</button></div>`
+        : `<button class="lrow" data-act="item" data-id="${it.id}">${inner}</button>`;
     });
   }
   return `<div class="ledger">${h}</div>`;
@@ -1289,6 +1342,19 @@ const locRow = (l, extra = '') => {
     ${l.code ? `<span class="tape">${esc(l.code)}</span>` : ''}<span class="chev">${ic('chev')}</span></button>`;
 };
 const tapesOf = it => `<span class="tapes">${(S.ix.byItem.get(it.id) || []).map(s => `<span class="tape">${esc(locCode(s.location_id))} · ${s.qty}</span>`).join('') || '<span class="s">재고 없음</span>'}</span>`;
+
+/* 내가 최근에 자주 입출고한 품목 6개 (많이 쓴 순, 같으면 최근 순) */
+function myItems(tx) {
+  const score = new Map();
+  (tx || []).forEach((t, i) => { if (!S.ix.item.has(t.item_id) || t.type === 'cancel') return; const v = score.get(t.item_id) || { n: 0, first: i }; v.n++; score.set(t.item_id, v); });
+  return [...score.entries()].sort((a, b) => b[1].n - a[1].n || a[1].first - b[1].first).slice(0, 6).map(([id]) => S.ix.item.get(id));
+}
+/* 홈 화면에 앱 설치 안내 (설치했거나 「다음에」를 누르면 2주 동안 숨김) */
+function installPromo() {
+  if (isStandalone() || !pref('install')) return '';
+  if (!S.installEvt && !isIOS() && !DEMO) return '';
+  return `<div class="promo">${ic('phone')}<div class="main"><b>앱을 홈 화면에 추가하세요</b><span>아이콘을 눌러 바로 열리고, 화면도 넓게 쓸 수 있습니다.</span></div><div class="acts"><button class="btn sm primary" data-act="install">추가하기</button><button class="btn sm ghost" data-act="installLater">다음에</button></div></div>`;
+}
 
 /* ───────── 화면들 ───────── */
 const VIEW = {};
@@ -1304,14 +1370,16 @@ VIEW['items.browse'] = r => {
   } else if (mode === 'loc') {
     if (!node) {
       const lows = S.cache.items.filter(isLow); const d = vd(); const tx = d.tx || [];
-      pane = `<div class="stats">
+      const mine = myItems(d.mine);
+      pane = `${installPromo()}<div class="stats">
           <button class="stile ${lows.length ? 'crit' : ''}" data-act="jump" data-to="sec-low"><span class="k">${ic('warn')}재고 부족</span><span class="v">${lows.length}<small>품목</small></span></button>
           <button class="stile" data-act="jump" data-to="sec-recent"><span class="k">${ic('move')}오늘 입출고</span><span class="v">${d.today ?? '–'}<small>건</small></span></button>
           <div class="stile"><span class="k">${ic('box')}등록 품목</span><span class="v">${S.cache.items.length}<small>종</small></span></div></div>
+        ${mine.length ? `<section class="sec"><div class="sec-h"><h2>내가 자주 쓰는 품목</h2></div><div class="quick">${mine.map(it => `<button class="qitem" data-act="item" data-id="${it.id}"><span class="t">${esc(itemTitle(it))}</span><span class="qty ${isLow(it) ? 'low' : ''}">${total(it.id)}<small>${esc(it.unit)}</small></span></button>`).join('')}</div></section>` : ''}
         ${tools}
-        ${lows.length ? `<section class="sec" id="sec-low"><div class="sec-h"><h2>재고 부족</h2><span class="aside">최소 수량보다 적은 품목</span></div>${itemList(lows, it => total(it.id))}</section>` : ''}
+        ${lows.length ? `<section class="sec" id="sec-low"><div class="sec-h"><h2>재고 부족</h2><button class="btn sm" data-act="shareLow">${ic('share')}목록 보내기</button></div>${itemList(lows, it => total(it.id))}</section>` : ''}
         <section class="sec"><div class="sec-h"><h2>보관 위치</h2></div><div class="ledger">${(S.ix.locKids.get(null) || []).map(l => locRow(l)).join('') || empty('pin', '등록된 위치가 없습니다.', can(S.user, 'location') ? '더보기 › 위치 관리에서 구역을 추가하세요.' : '')}</div></section>
-        <section class="sec" id="sec-recent"><div class="sec-h"><h2>최근 입출고</h2></div><div class="ledger hist">${d.tx ? (tx.length ? tx.map(t => txRow(t, true)).join('') : empty('list', '아직 입출고 기록이 없습니다.')) : loadingBox()}</div></section>`;
+        <section class="sec" id="sec-recent"><div class="sec-h"><h2>최근 입출고</h2><button class="btn sm ghost" data-act="history">${ic('history')}전체 기록·찾기</button></div><div class="ledger hist">${d.tx ? (tx.length ? tx.map(t => txRow(t, true)).join('') : empty('list', '아직 입출고 기록이 없습니다.')) : loadingBox()}</div></section>`;
     } else {
       const l = S.ix.loc.get(node); if (!l) return { title: '위치 없음', body: empty('pin', '지워진 위치입니다.') };
       const path = pathOf(S.ix.loc, node);
@@ -1327,7 +1395,7 @@ VIEW['items.browse'] = r => {
           <button class="btn sm" data-act="labelsFor" data-id="${l.id}">${ic('qr')}라벨</button></section>
         ${kids.length ? `<section class="sec"><div class="sec-h"><h2>안쪽 위치</h2></div><div class="ledger">${kids.map(k => locRow(k)).join('')}</div></section>` : ''}
         <section class="sec"><div class="sec-h"><h2>이 위치의 자재</h2><button class="btn sm" data-act="inHere" data-id="${l.id}" data-write>${ic('in')}여기에 입고</button></div>
-        ${here.length ? itemList(here.map(x => x.it), it => qmap.get(it.id)) : `<div class="ledger">${empty('box', '이 위치에 등록된 자재가 없습니다.', kids.length ? '안쪽 위치를 열어 보세요.' : '「여기에 입고」로 자재를 넣을 수 있습니다.')}</div>`}</section>`;
+        ${here.length ? itemList(here.map(x => x.it), it => qmap.get(it.id), null, node) : `<div class="ledger">${empty('box', '이 위치에 등록된 자재가 없습니다.', kids.length ? '안쪽 위치를 열어 보세요.' : '「여기에 입고」로 자재를 넣을 수 있습니다.')}</div>`}</section>`;
     }
   } else {
     const kids = S.ix.catKids.get(node || null) || [];
@@ -1344,6 +1412,40 @@ VIEW['items.browse'] = r => {
   }
   const body = searchBox('q-items', S.q, '품명·규격·제조사·기종 검색', '자재 검색') + `<div id="pane" class="pane">${pane}</div>`;
   return { title, body, pane, crumbs: q ? null : cr, actions: q ? '' : actions };
+};
+
+/* 입출고 기록 찾기: 달별로 보고, 현장·품목·사람·메모로 거른다. 관리자는 엑셀로 받는다 */
+const HIST_KINDS = [['', '전체'], ['out', '출고'], ['in', '입고'], ['move', '이동'], ['etc', '취소·정정']];
+function histRows(list) {
+  const q = (S.histQ || '').trim().toLowerCase(); const k = S.histKind || '';
+  return (list || []).filter(t => {
+    if (k === 'etc' ? !['cancel', 'adjust'].includes(t.type) : k && t.type !== k) return false;
+    if (!q) return true;
+    const it = S.ix.item.get(t.item_id);
+    const hay = [it && it.name, it && it.spec, it && it.maker, t.site, t.note, personName(t.user_id), t.from_loc && locCode(t.from_loc), t.to_loc && locCode(t.to_loc), t.from_loc && locPathText(t.from_loc), t.to_loc && locPathText(t.to_loc)].join(' ').toLowerCase();
+    return q.split(/\s+/).every(w => hay.includes(w));
+  });
+}
+const monthLabel = m => { const [y, mm] = m.split('-'); return `${y}년 ${+mm}월`; };
+const shiftMonth = (m, d) => { const [y, mm] = m.split('-').map(Number); const x = new Date(y, mm - 1 + d, 1); return x.getFullYear() + '-' + pad(x.getMonth() + 1); };
+const thisMonth = () => { const d = new Date(); return d.getFullYear() + '-' + pad(d.getMonth() + 1); };
+VIEW['items.history'] = r => {
+  const list = vd().list; const rows = list ? histRows(list) : null;
+  const cnt = k => (rows || []).filter(t => t.type === k && !t.canceled_by).reduce((a, t) => a + 1, 0);
+  let pane;
+  if (!rows) pane = `<div class="ledger">${loadingBox()}</div>`;
+  else {
+    let h = '', day = '';
+    rows.forEach(t => { const d = toDate(t.created_at); const dl = (d.getMonth() + 1) + '월 ' + d.getDate() + '일 (' + '일월화수목금토'[d.getDay()] + ')'; if (dl !== day) { day = dl; h += `<div class="group-h"><span>${dl}</span></div>`; } h += txRow(t, true); });
+    pane = `<div class="sumline"><span>${rows.length}건</span>${['out', 'in', 'move'].map(k => cnt(k) ? `<span class="chip ${k === 'out' ? 'out' : k === 'in' ? 'acc' : ''}">${TX_NAME[k]} ${cnt(k)}</span>` : '').join('')}</div>
+      <div class="ledger hist">${h || empty('search', S.histQ ? '찾는 기록이 없습니다.' : '이 달에는 기록이 없습니다.', S.histQ ? '현장 이름 일부, 품명, 사람 이름으로 찾아보세요.' : '')}</div>`;
+  }
+  const body = `<div class="monthbar"><button class="iconbtn" data-act="histMonth" data-d="-1" aria-label="이전 달">${ic('back')}</button><b>${monthLabel(r.month)}</b><button class="iconbtn" data-act="histMonth" data-d="1" aria-label="다음 달" ${r.month >= thisMonth() ? 'disabled' : ''}>${ic('chev')}</button></div>
+    ${searchBox('q-hist', S.histQ || '', '현장·품명·사람·메모로 찾기 (예: 한빛)', '기록 검색')}
+    <div class="filters" role="group" aria-label="종류">${HIST_KINDS.map(([k, l]) => `<button class="fchip" data-act="histKind" data-k="${k}" aria-pressed="${(S.histKind || '') === k}">${l}</button>`).join('')}</div>
+    <div id="pane" class="pane">${pane}</div>`;
+  const actions = can(S.user, 'audit') ? `<button class="btn sm" data-act="histExport">${ic('download')}엑셀</button>` : '';
+  return { title: '입출고 기록', crumbs: crumbs([{ label: '자재', act: 'locRoot' }, { label: '입출고 기록' }]), body, pane, actions };
 };
 
 function txRow(t, withItem = false) {
@@ -1412,6 +1514,13 @@ VIEW['docs.browse'] = r => {
         return `<button class="lrow" data-act="folder" data-id="${k.id}"><span class="folder-ic">${ic('folder')}</span><div class="main"><span class="t">${esc(k.name)}</span><span class="s">${[m ? '폴더 ' + m : '', n ? '파일 ' + n : ''].filter(Boolean).join(' · ') || '비어 있음'}${k.auto_sort ? ' · 날짜별 자동 정리' : ''}</span></div><span class="chev">${ic('chev')}</span></button>`; }).join('')}</div></section>` : (fid ? '' : `<div class="ledger">${empty('folder', '아직 폴더가 없습니다.', '「폴더 만들기」로 도면, 교육 자료 같은 폴더를 만드세요.')}</div>`)}
       ${fid ? `<section class="sec"><div class="sec-h"><h2>파일</h2><span class="aside">${docs.length ? docs.length + '개 · 최근 올린 순' : ''}</span></div><div class="ledger">${docs.length ? docs.map(d => docRow(d)).join('') : empty('docs', '아직 파일이 없습니다.', '아래 「올리기」로 PDF·엑셀·사진 등을 그대로 올리세요.')}</div></section>` : ''}
       ${!fid ? `<p class="muted" style="font-size:12.5px;margin:0">자료는 회사용 구글 드라이브에 저장되고, 앱 폴더와 같은 모양으로 정리됩니다.</p>` : ''}`;
+    if (!fid) {
+      const fv = [...favs()].map(id => S.ix.doc.get(id)).filter(Boolean);
+      const rc = recentDocs().map(id => S.ix.doc.get(id)).filter(d => d && !fv.includes(d)).slice(0, 5);
+      pane = (fv.length ? `<section class="sec"><div class="sec-h"><h2>즐겨찾기</h2><span class="aside">${fv.length}개</span></div><div class="ledger">${fv.map(d => docRow(d, true)).join('')}</div></section>` : '')
+        + (rc.length ? `<section class="sec"><div class="sec-h"><h2>최근 본 자료</h2></div><div class="ledger">${rc.map(d => docRow(d, true)).join('')}</div></section>` : '')
+        + pane;
+    }
   }
   const cr = f && !q ? crumbs([{ label: '자료', act: 'folder', data: { id: '' } }, ...pathOf(S.ix.folder, fid).map(p => ({ label: p.name, act: 'folder', data: { id: p.id } }))]) : null;
   const fab = fid ? `<button class="fab" data-act="upload" data-write>${ic('upload')}올리기</button>` : '';
@@ -1437,7 +1546,9 @@ VIEW['docs.doc'] = r => {
       <div class="toolbar">${!DEMO && d.drive_id ? `<a class="btn sm" href="https://drive.google.com/file/d/${esc(d.drive_id)}/view" target="_blank" rel="noopener">${ic('eye')}크게 보기</a>` : ''}${adm ? `<button class="btn sm" data-act="docRename" data-id="${d.id}" data-write>${ic('edit')}이름 변경</button><button class="btn sm" data-act="docMove" data-id="${d.id}" data-write>${ic('move')}이동</button><button class="btn sm danger" data-act="docDelete" data-id="${d.id}" data-write>${ic('trash')}삭제</button>` : ''}</div></section>
     ${commentsBlock('doc', d.id, v.cm)}`;
   const cr = crumbs([{ label: '자료', act: 'folder', data: { id: '' } }, ...pathOf(S.ix.folder, d.folder_id).map(p => ({ label: p.name, act: 'folder', data: { id: p.id } })), { label: d.name }]);
-  return { title: d.name, crumbs: cr, body };
+  const on = favs().has(d.id);
+  const actions = `<button class="iconbtn fav ${on ? 'on' : ''}" data-act="fav" data-id="${d.id}" aria-label="${on ? '즐겨찾기 빼기' : '즐겨찾기'}" aria-pressed="${on}">${ic(on ? 'starOn' : 'star')}</button>`;
+  return { title: d.name, crumbs: cr, body, actions };
 };
 
 /* ───────── 스캔 ───────── */
@@ -1476,12 +1587,22 @@ VIEW['more.menu'] = () => {
       ${row('go" data-v="bulk', 'paste', '품목 대량 등록', '엑셀에서 복사해 한 번에 넣기')}
       ${row('go" data-v="trash', 'trash', '휴지통', '지운 뒤 30일 안에 되살리기')}
       ${row('go" data-v="guide', 'book', '관리자 안내', '문제가 생겼을 때 할 일')}
-    </div></section>` : `<section class="sec"><div class="ledger menu">${row('go" data-v="guide', 'book', '사용 안내', '입고·출고·자료 올리기')}</div></section>`}
+    </div></section>` : ''}
+    <section class="sec"><div class="sec-h"><h2>도움말</h2></div><div class="ledger menu">
+      ${adm ? '' : row('go" data-v="guide', 'book', '사용 안내', '입고·출고·되돌리기·자료 올리기')}
+      ${row('tour', 'info', '처음 안내 다시 보기', '꺼내기 · 되돌리기 · 자료 검색 (3장)')}
+      ${isStandalone() ? '' : row('install', 'phone', '홈 화면에 앱 추가', '아이콘을 눌러 바로 열기')}
+    </div></section>
     <section class="sec"><div class="sec-h"><h2>화면</h2></div><div class="ledger">
       <div class="lrow"><span class="ic">${ic(themeNow() === 'dark' ? 'moon' : themeNow() === 'light' ? 'sun' : 'contrast')}</span><div class="main"><span class="t">화면 모드</span><span class="s">자동은 휴대폰의 밝게·어둡게 설정을 따릅니다. 이 기기에만 저장됩니다.</span></div></div>
-      <div class="themepick"><div class="seg block" role="group" aria-label="화면 모드">${[['auto', 'contrast', '자동'], ['light', 'sun', '밝게'], ['dark', 'moon', '어둡게']].map(([v, i, l]) => `<button data-act="theme" data-v="${v}" aria-pressed="${themeNow() === v}">${ic(i)}${l}</button>`).join('')}</div></div></div></section>
+      <div class="themepick"><div class="seg block" role="group" aria-label="화면 모드">${[['auto', 'contrast', '자동'], ['light', 'sun', '밝게'], ['dark', 'moon', '어둡게']].map(([v, i, l]) => `<button data-act="theme" data-v="${v}" aria-pressed="${themeNow() === v}">${ic(i)}${l}</button>`).join('')}</div></div>
+      <div class="lrow"><span class="ic">${ic('textsize')}</span><div class="main"><span class="t">글자 크기</span><span class="s">「크게」는 글자와 버튼을 모두 키웁니다. 이 기기에만 저장됩니다.</span></div></div>
+      <div class="themepick"><div class="seg block" role="group" aria-label="글자 크기">${[['md', '보통'], ['lg', '크게']].map(([v, l]) => `<button data-act="size" data-v="${v}" aria-pressed="${sizeNow() === v}" ${v === 'lg' ? 'style="font-size:16px"' : ''}>가 ${l}</button>`).join('')}</div></div></div></section>
+    <section class="sec"><div class="sec-h"><h2>알림 창 설정</h2><span class="aside">이 기기에만 저장</span></div><div class="ledger">
+      ${[['done', 'check', '저장 완료 알림', '「출고했습니다」처럼 저장한 뒤 아래에 잠깐 뜨는 알림'], ['undo', 'undo', '되돌리기 버튼', '입고·출고·이동 직후 8초 동안 뜨는 「되돌리기」'], ['install', 'phone', '홈 화면 추가 안내', '자재 첫 화면 맨 위의 파란 상자']].map(([k, i, t, s]) => `<label class="lrow" style="cursor:pointer"><span class="ic">${ic(i)}</span><div class="main"><span class="t">${t}</span><span class="s">${s}</span></div><input type="checkbox" class="switch" data-act="pref" data-k="${k}" ${pref(k) ? 'checked' : ''} aria-label="${t}"></label>`).join('')}</div>
+      <p class="muted" style="font-size:12.5px;margin:0">저장 실패·연결 끊김 같은 빨간 알림은 꺼도 항상 뜹니다.</p></section>
     ${DEMO ? `<section class="sec"><div class="sec-h"><h2>체험판 설정</h2></div><div class="ledger">
-      <label class="lrow" style="cursor:pointer"><span class="ic">${ic('wifioff')}</span><div class="main"><span class="t">오프라인 흉내</span><span class="s">켜면 인터넷이 끊긴 것처럼 저장이 막힙니다</span></div><input type="checkbox" id="fake-off" data-act="fakeOff" ${S.fakeOffline ? 'checked' : ''} style="width:22px;height:22px"></label>
+      <label class="lrow" style="cursor:pointer"><span class="ic">${ic('wifioff')}</span><div class="main"><span class="t">오프라인 흉내</span><span class="s">켜면 인터넷이 끊긴 것처럼 저장이 막힙니다</span></div><input type="checkbox" class="switch" id="fake-off" data-act="fakeOff" ${S.fakeOffline ? 'checked' : ''} aria-label="오프라인 흉내"></label>
       <button class="lrow" data-act="switchRole"><span class="ic">${ic('users')}</span><div class="main"><span class="t">다른 역할로 보기</span><span class="s">개발자 · 관리자 · 직원 화면 비교</span></div><span class="chev">${ic('chev')}</span></button>
       <button class="lrow" data-act="demoReset"><span class="ic">${ic('restore')}</span><div class="main"><span class="t">체험판 처음 상태로</span><span class="s">예시 데이터를 다시 채웁니다</span></div></button></div></section>` : ''}
     <button class="btn block ghost" data-act="logout">${ic('logout')}로그아웃</button>`;
@@ -1576,8 +1697,11 @@ VIEW['more.cats'] = () => {
 const BULK_COLS = ['품명', '규격', '제조사', '적용 기종', '분류', '단위', '최소 재고', '위치 코드', '수량', '메모'];
 VIEW['more.bulk'] = () => {
   const b = S.bulk || (S.bulk = { text: '', rows: [] });
-  const body = `<div class="notice">${ic('info')}<span>엑셀에 아래 순서대로 열을 만들고, 제목 줄을 뺀 나머지 칸을 드래그해 복사(Ctrl+C)한 뒤 아래 칸에 붙여 넣으세요(Ctrl+V). 분류와 위치 코드는 앱에 이미 있는 이름·코드와 같아야 연결됩니다.</span></div>
+  const body = `<div class="notice">${ic('info')}<span>「빈 양식 받기」로 받은 파일(또는 아래 순서대로 열을 만든 엑셀)에 품목을 채우고, 채운 칸을 드래그해 복사(Ctrl+C)한 뒤 아래 칸에 붙여 넣으세요(Ctrl+V). 제목 줄은 같이 복사해도 저절로 빠집니다. 분류와 위치 코드는 앱에 이미 있는 이름·코드와 같아야 연결됩니다.</span></div>
+    <div class="toolbar"><button class="btn sm" data-act="bulkTemplate">${ic('download')}빈 양식 받기 (엑셀)</button><span class="muted" style="font-size:12.5px">열 순서가 맞춰진 빈 엑셀 파일입니다.</span></div>
     <div class="scrollx"><table class="tbl"><tr>${BULK_COLS.map(c => `<th>${c}</th>`).join('')}</tr><tr><td>도어 롤러</td><td>Ø50 행거용</td><td>현대엘리베이터</td><td>STVF</td><td>롤러·슈</td><td>개</td><td>6</td><td>WH-S1-상</td><td>12</td><td></td></tr></table></div>
+    <details class="ledger"><summary class="lrow" style="cursor:pointer"><span class="ic">${ic('tag')}</span><div class="main"><span class="t">지금 앱에 있는 분류·위치 코드</span><span class="s">「분류」「위치 코드」 칸에 이 이름을 그대로 쓰세요</span></div><span class="chev">${ic('chev')}</span></summary>
+      <div class="reflist"><b>분류</b><div>${S.cache.categories.map(c => `<span class="chip">${esc(c.name)}</span>`).join('') || '<span class="muted">없음</span>'}</div><b>위치 코드</b><div>${S.cache.locations.filter(l => l.code).map(l => `<span class="tape">${esc(l.code)}</span>`).join('') || '<span class="muted">없음</span>'}</div></div></details>
     <div class="field"><label for="bulk-in">붙여 넣을 곳</label><textarea id="bulk-in" rows="6" placeholder="엑셀에서 복사한 내용을 여기에 붙여 넣으세요" data-act="noop">${esc(b.text)}</textarea></div>
     <button class="btn" data-act="bulkCheck">${ic('check')}미리 보기</button>
     ${b.rows.length ? `<section class="sec"><div class="sec-h"><h2>미리 보기</h2><span class="aside">${b.rows.length}줄 · 문제 ${b.rows.filter(r => r.warn).length}줄</span></div>
@@ -1597,11 +1721,12 @@ VIEW['more.trash'] = () => {
 VIEW['more.guide'] = () => {
   const adm = can(S.user, 'users');
   const body = `<article class="guide hero" style="gap:6px">
-    <h3>자재 쓰는 법</h3><ol><li>자재 탭에서 위치별 또는 분류별로 찾거나, 스캔 탭에서 선반 QR을 찍습니다.</li><li>품목을 열고 <b>출고</b>를 누른 뒤 꺼낸 위치·수량·현장을 고릅니다.</li><li>꺼냈다가 안 쓰고 돌려놓으면 기록 옆의 <b>출고 취소 (안 씀)</b>를 누릅니다. 수량이 원래대로 돌아갑니다. 본인 기록은 7일 안에 취소할 수 있고, 그 뒤에는 관리자가 합니다.</li><li>새로 들어온 자재는 <b>입고</b>, 다른 캐비넷으로 옮길 때는 <b>이동</b>입니다.</li></ol>
-    <h3>자료 쓰는 법</h3><ol><li>자료 탭에서 폴더를 열고 <b>올리기</b>로 PDF·엑셀·사진을 그대로 올립니다.</li><li>검색창에 에러코드나 부품명을 치면 파일 안의 글자까지 찾아 줍니다.</li><li>교육 영상은 유튜브에 「일부 공개」로 올린 뒤 <b>영상·링크</b>로 주소만 등록합니다.</li></ol>
+    <h3>자재 쓰는 법</h3><ol><li>가운데 <b>스캔</b>으로 선반 QR을 찍으면 그 선반의 자재가 열립니다. 쓸 자재 옆 <b>꺼내기</b>를 누르고 수량·현장만 맞추면 출고가 끝납니다.</li><li>자재 탭 검색창이나 위치별·분류별 목록으로 찾아 품목을 열고 <b>출고</b>를 눌러도 됩니다. 자주 쓰는 품목은 자재 첫 화면 「내가 자주 쓰는 품목」에 저절로 모입니다.</li><li>저장 직후 아래에 뜨는 <b>되돌리기</b>를 누르면 방금 기록이 취소됩니다.</li><li>꺼냈다가 안 쓰고 돌려놓으면 기록 옆의 <b>출고 취소 (안 씀)</b>를 누릅니다. 수량이 원래대로 돌아갑니다. 본인 기록은 7일 안에 취소할 수 있고, 그 뒤에는 관리자가 합니다.</li><li>새로 들어온 자재는 <b>입고</b>, 다른 캐비넷으로 옮길 때는 <b>이동</b>입니다.</li><li>지난 기록은 자재 첫 화면 「최근 입출고」의 <b>전체 기록·찾기</b>에서 달별로 보고, 현장 이름·품명·사람으로 찾을 수 있습니다.</li></ol>
+    <h3>자료 쓰는 법</h3><ol><li>자료 탭에서 폴더를 열고 <b>올리기</b>로 PDF·엑셀·사진을 그대로 올립니다.</li><li>검색창에 에러코드나 부품명을 치면 파일 안의 글자까지 찾아 줍니다.</li><li>교육 영상은 유튜브에 「일부 공개」로 올린 뒤 <b>영상·링크</b>로 주소만 등록합니다.</li><li>자주 보는 자료는 파일 화면 오른쪽 위 <b>☆</b>를 누르면 자료 첫 화면 맨 위 「즐겨찾기」에 모입니다. 최근에 본 자료도 그 아래에 보입니다.</li></ol>
     ${adm ? `<h3>가입 승인과 퇴사자</h3><ol><li>더보기 › 직원 관리에서 이름·사내번호를 확인하고 승인합니다.</li><li>비밀번호를 잊은 직원은 이름을 눌러 <b>비밀번호 초기화</b> → 화면에 뜬 임시 번호를 알려 주고, 로그인 뒤 본인이 바꾸게 합니다.</li><li>퇴사자는 지우지 않고 <b>사용 중지</b>합니다. 그 사람이 남긴 입출고 기록은 그대로 남습니다.</li></ol>
     <h3>위치 추가와 QR 라벨</h3><ol><li>더보기 › 위치 관리에서 캐비넷·선반을 추가하고 짧은 코드(예: WH-S5)를 붙입니다.</li><li>QR 라벨 만들기 → 인쇄 → 선반에 붙입니다. 앱의 <b>스캔</b> 탭으로 찍으면 그 선반 화면이 바로 열립니다. (안드로이드는 폰 기본 카메라로 찍어도 열립니다. 아이폰은 기본 카메라로 찍으면 사파리에서 열려 로그인을 따로 해야 하니 앱의 스캔 탭을 쓰세요.)</li></ol>
     <h3>빨간 불이 켜졌을 때 (시스템 상태)</h3><ol><li>직원들이 앱을 평소처럼 쓰고 있다면 급한 일은 아닙니다. 앱을 쓰는 것만으로도 서버는 깨어 있습니다.</li><li>회사용 구글 계정(gaya.elevator.app)에 로그인해 보안 경고나 계정 잠김 안내가 있는지 봅니다.</li><li>그래도 계속 빨간 불이면 개발자(재석)에게 연락합니다.</li><li>앱이 아예 열리지 않고 「서버가 쉬고 있습니다」라고 나오면: supabase.com 에 소유자 계정으로 로그인 → 가야엘리베이터 조직 › gaya-app 프로젝트 → <b>Resume project</b> 를 누르고 몇 분 기다립니다. 멈춘 뒤 1년 안이면 데이터는 그대로입니다.</li></ol>
+    <h3>재고 부족 알리기와 기록 받기</h3><ol><li>자재 첫 화면 「재고 부족」의 <b>목록 보내기</b>를 누르면 부족한 품목 목록을 카톡 등으로 바로 보낼 수 있습니다.</li><li>전체 기록·찾기 화면 오른쪽 위 <b>엑셀</b>을 누르면 그 달 기록(검색·종류로 거른 그대로)이 엑셀 파일로 받아집니다.</li></ol>
     <h3>저장 용량 80% 경고</h3><p>개발자(재석)에게 연락합니다. 구글 원 구독(100GB 월 2,400원) 또는 무료 구글 계정 추가 중에서 고르면 되고, 어느 쪽이든 앱은 그대로 씁니다.</p>
     <h3>매년 1월에 할 일</h3><p>회사용 구글 계정(gaya.elevator.app)에 한 번 로그인해 드라이브의 「가야앱 백업」 폴더를 열어 봅니다. 구글은 2년 동안 쓰지 않은 계정을 지우기 때문에, 사람이 1년에 한 번 들어가 두는 것입니다.</p>
     <h3>앱이 업데이트되면</h3><p>개발자가 고친 내용은 올리는 즉시 반영됩니다. 직원 폰에서 예전 화면이 보이면 앱을 완전히 닫았다가 다시 열면 됩니다.</p>` : ''}
@@ -1644,7 +1769,7 @@ function sheetView() {
     case 'in':
       if (!it) {
         h = sheetHead('입고할 품목 고르기', esc(locPathText(d.location_id)) + '에 넣을 품목') + `<div class="search">${ic('search')}<input id="sh-iq" data-bind="iq" data-live value="${esc(d.iq || '')}" placeholder="품명·규격 검색" autocomplete="off" data-autofocus></div>
-          <div class="pickgrid" style="max-height:50vh" id="iq-list">${inPickList(d.iq)}</div>`;
+          <div class="pickgrid" style="max-height:calc(50vh / var(--z,1))" id="iq-list">${inPickList(d.iq)}</div>`;
         break;
       }
       h = sheetHead('입고', esc(itemTitle(it))) + `<div class="field"><span class="lab">넣을 위치</span>${locPicker('location_id', d.location_id, { qtyOf: stockAt })}</div>
@@ -1653,9 +1778,11 @@ function sheetView() {
         ${sheetErr()}${okBtn('입고 ' + qn + unit, 'in')}`;
       break;
     case 'out':
-      h = sheetHead('출고', esc(itemTitle(it))) + `<div class="field"><span class="lab">꺼내는 위치</span>${locPicker('location_id', d.location_id, { onlyWith: withStock(), qtyOf: stockAt })}</div>
+      h = sheetHead('출고', esc(itemTitle(it))) + `<div class="field"><span class="lab">꺼내는 위치</span>${d.quick && d.location_id ? `<div class="fixedloc"><span class="tape">${esc(locCode(d.location_id))}</span><span class="p">${esc(locPathText(d.location_id))}</span><button type="button" class="btn sm ghost" data-act="outFull">바꾸기</button></div>` : locPicker('location_id', d.location_id, { onlyWith: withStock(), qtyOf: stockAt })}</div>
         <div class="field"><span class="lab">수량 (${esc(unit)})${d.location_id ? ' · 이 위치에 ' + stockAt(d.location_id) + esc(unit) : ''}</span>${stepper('qty', d.qty)}</div>
-        <div class="field"><label for="sh-site">현장 (선택)</label><input id="sh-site" data-bind="site" list="sites" value="${esc(d.site || '')}" placeholder="예: 한빛아파트 103동 2호기" autocomplete="off"><datalist id="sites">${(S.recentSites || []).map(x => `<option value="${esc(x)}">`).join('')}</datalist></div>
+        <div class="field"><label for="sh-site">현장 (선택)</label><div class="siterow"><input id="sh-site" data-bind="site" list="sites" value="${esc(d.site || '')}" placeholder="예: 한빛아파트" autocomplete="off" enterkeyhint="next"><div class="unitin"><input id="sh-dong" data-bind="dong" value="${esc(d.dong || '')}" inputmode="numeric" placeholder="103" autocomplete="off" enterkeyhint="next" aria-label="동"><span>동</span></div><div class="unitin ho"><input id="sh-ho" data-bind="ho" value="${esc(d.ho || '')}" inputmode="numeric" placeholder="2" autocomplete="off" enterkeyhint="done" aria-label="호기"><span>호기</span></div></div>
+          <datalist id="sites">${siteNames().map(x => `<option value="${esc(x)}">`).join('')}</datalist>
+          ${(S.mySites || []).length ? `<div class="sitechips"><span>최근</span>${S.mySites.slice(0, 4).map(x => `<button type="button" class="fchip sm" data-act="pickSite" data-v="${esc(x)}">${esc(x)}</button>`).join('')}</div>` : ''}</div>
         <div class="field"><label for="sh-note">메모 (선택)</label><input id="sh-note" data-bind="note" value="${esc(d.note || '')}"></div>
         ${sheetErr()}${okBtn('출고 ' + qn + unit, 'out')}
         <p class="muted" style="margin:0;font-size:12.5px">꺼냈다가 안 쓰면 기록에서 「출고 취소 (안 씀)」를 누르면 수량이 돌아옵니다.</p>`;
@@ -1735,6 +1862,24 @@ function sheetView() {
     case 'tempPw':
       h = sheetHead('임시 비밀번호') + `<p style="margin:0">${esc(d.name)}님에게 아래 번호를 알려 주세요. 로그인한 뒤 더보기 › 내 정보에서 바로 바꾸도록 안내하세요.</p><div class="total" style="justify-content:center;border:0;padding:0"><span class="big mono" style="letter-spacing:.12em">${esc(d.pw)}</span></div><button class="btn block" data-act="copyPw" data-pw="${esc(d.pw)}">번호 복사</button><button class="btn primary block big" data-act="sheetClose">확인</button>`;
       break;
+    case 'install': {
+      const ios = isIOS() || DEMO, and = !isIOS() || DEMO;
+      h = sheetHead('홈 화면에 앱 추가', '한 번만 해 두면 아이콘을 눌러 바로 열립니다')
+        + (ios ? `<div class="howto"><div class="howto-h">아이폰 · 사파리에서</div><ol class="steps"><li><span class="n">1</span><span>화면 아래쪽 <b>공유 버튼</b> <span class="kbd">${ic('iosShare')}</span> 을 누릅니다. (아이패드는 위쪽)</span></li><li><span class="n">2</span><span>목록을 위로 올려 <b>「홈 화면에 추가」</b>를 누릅니다.</span></li><li><span class="n">3</span><span>오른쪽 위 <b>「추가」</b>를 누르면 끝입니다.</span></li></ol></div>` : '')
+        + (and ? `<div class="howto"><div class="howto-h">안드로이드 · 크롬 또는 삼성 인터넷에서</div><ol class="steps"><li><span class="n">1</span><span>크롬은 오른쪽 위 <b>⋮</b>, 삼성 인터넷은 아래쪽 <b>≡</b> 메뉴를 누릅니다.</span></li><li><span class="n">2</span><span><b>「홈 화면에 추가」</b> 또는 <b>「앱 설치」</b>를 누릅니다.</span></li><li><span class="n">3</span><span><b>「설치」</b>(또는 「추가」)를 누르면 끝입니다.</span></li></ol></div>` : '')
+        + `<div class="notice">${ic('info')}<span>카카오톡 안에서 열린 화면이면 먼저 카톡 메뉴의 <b>「다른 브라우저로 열기」</b>(아이폰은 「Safari로 열기」)를 누른 뒤 위 순서대로 하세요.</span></div><button class="btn primary block big" data-act="sheetClose">확인</button>`;
+      break;
+    }
+    case 'tour': {
+      const T = TOUR[d.step] || TOUR[0]; const last = d.step >= TOUR.length - 1;
+      h = `<div class="tour"><div class="tour-ill">${ic(T.icon)}</div><div class="tour-step">처음 안내 ${d.step + 1} / ${TOUR.length}</div><h3 id="sheet-t">${T.t}</h3><p>${T.b}</p></div>
+        <div class="dots" aria-hidden="true">${TOUR.map((_, i) => `<i class="${i === d.step ? 'on' : ''}"></i>`).join('')}</div>
+        ${last ? `<button class="btn primary block big" data-act="tourNext">시작하기</button>` : `<div class="row2"><button class="btn big ghost" data-act="sheetClose">건너뛰기</button><button class="btn big primary" data-act="tourNext">다음</button></div>`}`;
+      break;
+    }
+    case 'shareText':
+      h = sheetHead(d.title || '보내기', '아래 글을 복사해 카톡 대화방에 붙여 넣으세요') + `<textarea class="sharebox" id="share-text" readonly rows="8" data-nokeep>${esc(d.text)}</textarea><button class="btn primary block big" data-act="copyText">복사하기</button>`;
+      break;
     case 'switchRole':
       h = sheetHead('다른 역할로 보기', '체험판 전용') + `<div class="rolepick"><button data-act="quick" data-role="dev"><b>개발자</b><span>재석</span></button><button data-act="quick" data-role="admin"><b>관리자</b><span>김도윤</span></button><button data-act="quick" data-role="staff"><b>직원</b><span>박성호</span></button></div>`;
       break;
@@ -1746,13 +1891,13 @@ function sheetView() {
 ACT.sheetOk = () => {
   const s = S.sheet, d = s.d, A = S.api;
   const bad = m => { s.err = m; render(); };
-  const itName = () => itemTitle(S.ix.item.get(d.item_id));
+  const itName = () => itemTitle(S.ix.item.get(d.item_id)); const un = () => (S.ix.item.get(d.item_id) || {}).unit || '';
   const needQty = (min = 1) => isInt(d.qty, min) ? (d.qty = +d.qty, true) : (bad(min ? '수량을 1 이상의 정수로 입력하세요.' : '수량을 0 이상의 정수로 입력하세요.'), false);
   const jobs = {
-    in: () => { if (!d.item_id) return bad('품목을 고르세요.'); if (!d.location_id) return bad('넣을 위치를 고르세요.'); if (!needQty()) return; return run(() => A.stockIn(d), `입고했습니다 · ${itName()} ${d.qty}`); },
-    out: () => { if (!d.location_id) return bad('꺼내는 위치를 고르세요.'); if (!needQty()) return; const site = (d.site || '').trim();
-      return run(() => A.stockOut(d), `출고했습니다 · ${itName()} ${d.qty}`).then(ok => { if (ok && site) { S.recentSites = [site, ...(S.recentSites || []).filter(x => x !== site)].slice(0, 40); store.set('gaya-sites', S.recentSites); } }); },
-    move: () => { if (!d.from) return bad('보내는 위치를 고르세요.'); if (!d.to) return bad('받는 위치를 고르세요.'); if (!needQty()) return; return run(() => A.stockMove(d), '옮겼습니다'); },
+    in: () => { if (!d.item_id) return bad('품목을 고르세요.'); if (!d.location_id) return bad('넣을 위치를 고르세요.'); if (!needQty()) return; return run(() => A.stockIn(d), null).then(r => r && undoable(`입고했습니다 · ${itName()} ${d.qty}${un()}`, r)); },
+    out: () => { if (!d.location_id) return bad('꺼내는 위치를 고르세요.'); if (!needQty()) return; const site = siteText(d);
+      return run(() => A.stockOut({ ...d, site }), null).then(r => { if (!r) return; undoable(`출고했습니다 · ${itName()} ${d.qty}${un()}${site ? ' · ' + site : ''}`, r); if (site) rememberSite(site); }); },
+    move: () => { if (!d.from) return bad('보내는 위치를 고르세요.'); if (!d.to) return bad('받는 위치를 고르세요.'); if (!needQty()) return; return run(() => A.stockMove(d), null).then(r => r && undoable(`옮겼습니다 · ${itName()} ${d.qty}${un()}`, r)); },
     adjust: () => { if (!d.location_id) return bad('위치를 고르세요.'); if (!needQty(0)) return; if (!(d.reason || '').trim()) return bad('정정 사유를 적어 주세요. 활동 기록에 남습니다.'); return run(() => A.stockAdjust(d), '수량을 정정했습니다'); },
     item: () => {
       if (!(d.name || '').trim()) return bad('품명을 입력하세요.');
@@ -1807,17 +1952,19 @@ Object.assign(ACT, {
   go: d => nav({ tab: 'more', view: d.v }),
   authView: d => { S.authView = d.v; S.authErr = ''; render(); },
   quick: async d => { S.sheet = null; S.user = await S.api.quickLogin(d.role); await afterLogin(); },
-  recheck: async () => { try { S.user = await S.api.session(); } catch (e) { return toast(isNet(e) ? NET_MSG : e.message, true); } if (S.user && S.user.status === 'active') await afterLogin(); else { render(); toast('아직 승인되지 않았습니다.'); } },
+  recheck: async () => { try { S.user = await S.api.session(); } catch (e) { return toast(isNet(e) ? NET_MSG : e.message, true); } if (S.user && S.user.status === 'active') await afterLogin(); else { render(); note('아직 승인되지 않았습니다.'); } },
   logout: async () => {
     try { await S.api.logout(); } catch {}
-    store.del('gaya-cache'); store.del('gaya-user'); store.del('gaya-sites');
-    S.user = null; S.cache = null; S.ix = null; S.sheet = null; S.authView = 'login'; S.stack = [{ ...ROOTS.items }]; S.tab = 'items'; S.lastTab = {}; S.recentSites = []; S.q = ''; S.docsQ = ''; S.searchRes = null; S.docSearchRes = null;
+    store.del('gaya-cache'); store.del('gaya-user'); store.del('gaya-sites'); store.del('gaya-mysites');
+    S.user = null; S.cache = null; S.ix = null; S.sheet = null; S.authView = 'login'; S.stack = [{ ...ROOTS.items }]; S.tab = 'items'; S.lastTab = {}; S.recentSites = []; S.mySites = []; S.q = ''; S.docsQ = ''; S.searchRes = null; S.docSearchRes = null;
     for (const k in VIEWDATA) delete VIEWDATA[k];
     stopScan(); render();
   },
 
   txIn: d => { const rows = (S.ix.byItem.get(d.id) || []).slice().sort((a, b) => b.qty - a.qty); const here = route().node && S.ix.loc.has(route().node) ? route().node : null; openSheet('in', { item_id: d.id, location_id: here || (rows[0] || {}).location_id || null, qty: 1 }); },
-  txOut: d => { const rows = (S.ix.byItem.get(d.id) || []).slice().sort((a, b) => b.qty - a.qty); const here = route().node && rows.find(r => r.location_id === route().node); openSheet('out', { item_id: d.id, location_id: (here || rows[0] || {}).location_id || null, qty: 1 }); },
+  txOut: d => { const rows = (S.ix.byItem.get(d.id) || []).filter(r => r.qty > 0).sort((a, b) => b.qty - a.qty); const here = route().node && rows.find(r => r.location_id === route().node); openSheet('out', { item_id: d.id, location_id: (here || rows[0] || {}).location_id || null, qty: 1, quick: !!here || rows.length === 1 }); },
+  outHere: d => openSheet('out', { item_id: d.id, location_id: d.loc, qty: 1, quick: true }),
+  outFull: () => { if (S.sheet) { S.sheet.d.quick = false; render(); } },
   txMove: d => { const rows = (S.ix.byItem.get(d.id) || []).slice().sort((a, b) => b.qty - a.qty); openSheet('move', { item_id: d.id, from: (rows[0] || {}).location_id || null, to: null, qty: 1 }); },
   txAdjust: d => { const rows = S.ix.byItem.get(d.id) || []; const l = (rows[0] || {}).location_id || null; openSheet('adjust', { item_id: d.id, location_id: l, qty: l ? rows[0].qty : 0 }); },
   inHere: d => openSheet('in', { item_id: null, location_id: d.id, qty: 1 }),
@@ -1842,7 +1989,7 @@ Object.assign(ACT, {
   locDelete: d => ask('위치를 지울까요?', locPathText(d.id) + ' · 자재나 안쪽 위치가 남아 있으면 지워지지 않습니다.', 'locDelete', { id: d.id, ok: '지우기', danger: true }),
   labelsFor: d => { S.labelSel = new Set(descLocs(d.id).filter(id => S.ix.loc.get(id).kind !== 'zone' || id === d.id)); nav({ tab: 'more', view: 'labels' }); },
   selLabel: (d, el) => { el.checked ? S.labelSel.add(d.id) : S.labelSel.delete(d.id); setTimeout(render, 0); },
-  printLabels: () => { if (DEMO) return toast('체험판 화면에서는 인쇄 창이 열리지 않습니다. 실제 앱에서는 바로 인쇄됩니다.'); window.print(); },
+  printLabels: () => { if (DEMO) return note('체험판 화면에서는 인쇄 창이 열리지 않습니다. 실제 앱에서는 바로 인쇄됩니다.'); window.print(); },
   catNew: d => openSheet('cat', { parent_id: d.parent || null }),
   catEdit: d => openSheet('cat', { ...clone(S.ix.cat.get(d.id)) }),
   catDelete: d => ask('분류를 지울까요?', S.ix.cat.get(d.id).name + ' · 품목이나 하위 분류가 있으면 지워지지 않습니다.', 'catDelete', { id: d.id, ok: '지우기', danger: true }),
@@ -1882,7 +2029,7 @@ Object.assign(ACT, {
   bulkCheck: () => {
     const text = ($('#bulk-in') || {}).value || ''; S.bulk = { text, rows: [] };
     const byCat = new Map(S.cache.categories.map(c => [c.name.trim(), c.id])); const byCode = new Map(S.cache.locations.filter(l => l.code).map(l => [l.code.toUpperCase(), l.id]));
-    S.bulk.rows = text.split(/\r?\n/).map(l => l.split('\t')).filter(c => c.join('').trim()).map(c => {
+    S.bulk.rows = text.split(/\r?\n/).map(l => l.split('\t')).filter(c => c.join('').trim()).filter((c, i) => !(i === 0 && (c[0] || '').trim() === '품명')).map(c => {
       const [name, spec, maker, models, cat, unit, min, code, qty, memo] = c.map(x => (x || '').trim());
       const r = { name, spec, maker, models, unit: unit || '개', min_qty: isInt(min) ? +min : 0, qty: isInt(qty) ? +qty : 0, memo, catName: cat, locCode: code, rawQty: qty };
       if (cat) r.category_id = byCat.get(cat); if (code) r.location_id = byCode.get(code.toUpperCase());
@@ -1921,6 +2068,94 @@ Object.assign(ACT, {
   codeGo: () => { const v = ($('#code-in') || {}).value || ''; const l = findLoc(v); if (l) ACT.loc({ id: l.id }); else toast('그 코드의 위치가 없습니다. 라벨에 적힌 코드를 확인하세요.', true); }
 });
 
+/* ───────── 편의 기능 (업데이트 4) ───────── */
+/* 입고·출고·이동 직후 잠깐 뜨는 「되돌리기」: 누르면 방금 기록을 취소해 수량을 원래대로 돌린다 */
+function undoable(msg, tid) {
+  if (!tid || tid === true || !pref('undo')) return toast(msg);
+  toast(msg, false, { label: '되돌리기', fn: () => run(() => S.api.stockCancel({ tx_id: tid, op_id: opId() }), '되돌렸습니다 · 수량이 원래대로 돌아갔습니다') });
+}
+/* 현장: 「현장 이름 + 동 + 호기」 칸을 한 줄(예: 한빛아파트 103동 2호기)로 저장하고, 되읽을 때는 다시 나눈다 */
+const siteText = d => { const n = String(d.site || '').trim(), dg = String(d.dong || '').trim().replace(/\s*동$/, ''), ho = String(d.ho || '').trim().replace(/\s*호기?$/, ''); return [n, dg && dg + '동', ho && ho + '호기'].filter(Boolean).join(' '); };
+function parseSite(s) {
+  s = String(s || '').trim();
+  const m = s.match(/^(.*?)(?:(?:^|\s+)([0-9A-Za-z][0-9A-Za-z-]*|[가-힣])동)?(?:(?:^|\s+)([0-9A-Za-z-]+)호기)?$/);
+  return m ? { name: m[1].trim(), dong: m[2] || '', ho: m[3] || '' } : { name: s, dong: '', ho: '' };
+}
+const siteNames = () => [...new Set((S.recentSites || []).map(x => parseSite(x).name).filter(Boolean))].slice(0, 40);
+function rememberSite(site) {
+  S.recentSites = [site, ...(S.recentSites || []).filter(x => x !== site)].slice(0, 60); store.set('gaya-sites', S.recentSites);
+  S.mySites = [site, ...(S.mySites || []).filter(x => x !== site)].slice(0, 8); store.set('gaya-mysites', S.mySites);
+}
+/* 카톡 등으로 보내기: 폰 공유 창 → 안 되면 복사 → 그것도 안 되면 글을 띄워 직접 복사 */
+async function shareOut(title, text) {
+  if (navigator.share) { try { await navigator.share({ text }); return; } catch (e) { if (e && e.name === 'AbortError') return; } }
+  try { await navigator.clipboard.writeText(text); note('복사했습니다. 카톡 대화방에 붙여 넣으세요.'); return; } catch {}
+  openSheet('shareText', { title, text });
+}
+const TOUR = [
+  { icon: 'scan', t: '선반에서 바로 꺼내기', b: '가운데 <b>스캔</b>으로 선반의 QR을 찍으면 그 선반의 자재가 열립니다. 쓸 자재 옆 <b>꺼내기</b>를 누르고 수량만 맞추면 출고가 끝납니다.' },
+  { icon: 'undo', t: '잘못 눌렀다면 되돌리기', b: '입고·출고·이동을 저장하면 아래에 <b>되돌리기</b>가 잠깐 뜹니다. 꺼냈다가 안 쓴 자재는 기록 옆 <b>출고 취소 (안 씀)</b>를 누르면 수량이 돌아옵니다. 되돌리기 버튼이 필요 없으면 더보기 › 알림 창 설정에서 끌 수 있습니다.' },
+  { icon: 'docs', t: '자료는 검색으로', b: '자료 탭 검색창에 에러코드나 부품명을 치면 파일 안의 글자까지 찾습니다. 자주 보는 자료는 <b>☆</b>를 눌러 두면 자료 첫 화면 맨 위에 모입니다.' }
+];
+const ymd = d => d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate());
+Object.assign(ACT, {
+  toastAct: () => { const a = S.toast && S.toast.act; clearTimeout(toastTimer); S.toast = null; drawToast(); if (a) a.fn(); },
+  shareLow: () => {
+    const lows = S.cache.items.filter(isLow).sort((a, b) => a.name.localeCompare(b.name, 'ko'));
+    if (!lows.length) return note('재고가 부족한 품목이 없습니다.');
+    const n = new Date();
+    const text = `[가야 자재] 재고 부족 ${n.getMonth() + 1}/${n.getDate()} (${'일월화수목금토'[n.getDay()]})\n` + lows.map(it => `- ${itemTitle(it)}: ${total(it.id)}${it.unit} (최소 ${it.min_qty})`).join('\n') + `\n총 ${lows.length}품목`;
+    shareOut('재고 부족 목록', text);
+  },
+  copyText: () => {
+    const el = $('#share-text'); if (!el) return;
+    const done = () => { S.sheet = null; render(); note('복사했습니다. 카톡 대화방에 붙여 넣으세요.'); };
+    (navigator.clipboard ? navigator.clipboard.writeText(el.value) : Promise.reject()).then(done, () => { el.focus(); el.select(); try { if (document.execCommand('copy')) return done(); } catch {} toast('글을 길게 눌러 「전체 선택 › 복사」 하세요.', true); });
+  },
+
+  history: () => { S.histQ = ''; S.histKind = ''; nav({ tab: 'items', view: 'history', month: thisMonth() }); },
+  histMonth: d => { const r = route(); const m = shiftMonth(r.month, +d.d); if (m > thisMonth()) return; nav({ ...r, month: m }, true); },
+  histKind: d => { S.histKind = d.k; render(); },
+  histExport: () => {
+    const r = route(), v = vd();
+    if (!v.list) return note('기록을 불러오는 중입니다. 잠시 뒤 다시 누르세요.');
+    const rows = histRows(v.list); if (!rows.length) return toast('내려받을 기록이 없습니다.', true);
+    const lp = id => id ? (locPathText(id) || locCode(id)) : '';
+    const out = [['날짜', '시간', '구분', '품명', '규격', '수량', '단위', '보낸 위치', '받은 위치', '현장', '동', '호기', '메모', '담당자', '취소 여부']];
+    rows.slice().reverse().forEach(t => {
+      const dt = toDate(t.created_at), it = S.ix.item.get(t.item_id) || {}, adj = t.type === 'adjust';
+      out.push([ymd(dt), pad(dt.getHours()) + ':' + pad(dt.getMinutes()), TX_NAME[t.type] || t.type, it.name || '(지워진 품목)', it.spec || '', t.qty, it.unit || '',
+        t.type === 'in' ? '' : lp(t.from_loc), adj || t.type === 'out' ? '' : lp(t.to_loc), ...(p => [p.name, p.dong, p.ho])(parseSite(t.site)), (t.note || '') + (adj ? ` (기록 ${t.before} → 실제 ${t.after})` : ''), personName(t.user_id), t.canceled_by ? '취소됨' : '']);
+    });
+    const tag = (S.histKind ? '_' + (HIST_KINDS.find(x => x[0] === S.histKind) || [, ''])[1].replace(/[^가-힣a-z0-9]/gi, '') : '') + ((S.histQ || '').trim() ? '_검색' : '');
+    downloadCSV(`가야자재_입출고_${r.month}${tag}.csv`, out);
+    if (DEMO) note('체험판 화면에서는 파일이 안 받아질 수 있습니다. 실제 앱에서는 바로 받아집니다.'); else toast(`${rows.length}건을 엑셀 파일로 받았습니다`);
+  },
+  bulkTemplate: () => {
+    downloadCSV('가야자재_품목등록_양식.csv', [BULK_COLS]);
+    if (DEMO) note('체험판 화면에서는 파일이 안 받아질 수 있습니다. 실제 앱에서는 바로 받아집니다.'); else toast('빈 양식을 받았습니다. 엑셀에서 열어 채우세요.');
+  },
+
+  fav: d => { const s = favs(); const on = !s.has(d.id); on ? s.add(d.id) : s.delete(d.id); store.set(favKey(), [...s]); render(); toast(on ? '즐겨찾기에 넣었습니다 · 자료 첫 화면 맨 위에 보입니다' : '즐겨찾기에서 뺐습니다'); },
+
+  install: async () => {
+    const ev = S.installEvt;
+    if (!ev) return openSheet('install');
+    S.installEvt = null;
+    try { ev.prompt(); await ev.userChoice; } catch { openSheet('install'); }
+    render();
+  },
+  installLater: () => { setPref('install', false); render(); note('홈 화면 추가는 언제든 더보기 › 도움말 › 「홈 화면에 앱 추가」에서 할 수 있습니다.'); },
+  pref: (d, el) => { setPref(d.k, el.checked); setTimeout(render, 0); },
+  pickSite: d => { const s = S.sheet; if (!s) return; const p = parseSite(d.v); Object.assign(s.d, { site: p.name, dong: p.dong, ho: p.ho }); render(); },
+  size: d => { store.set(SIZE_KEY, d.v); applySize(d.v); render(); toast(d.v === 'lg' ? '글자를 크게 바꿨습니다' : '보통 크기로 바꿨습니다'); },
+  tour: () => openSheet('tour', { step: 0 }),
+  tourNext: () => { const s = S.sheet; if (!s) return; if (s.d.step >= TOUR.length - 1) { S.sheet = null; render(); return; } s.d.step++; render(); }
+});
+/* 안드로이드 크롬: 「앱 설치」 창을 우리 버튼으로 띄우기 위해 잡아 둔다 */
+window.addEventListener('beforeinstallprompt', e => { e.preventDefault(); S.installEvt = e; if (S.user && !S.sheet) render(); });
+window.addEventListener('appinstalled', () => { S.installEvt = null; if (S.user) { render(); toast('홈 화면에 추가했습니다. 다음부터는 아이콘으로 여세요.'); } });
+
 /* 로그인 뒤: 기본 자료를 받고 첫 화면을 연다. keepNav 면 보고 있던 화면을 그대로 둔다 (오프라인 저장본으로 먼저 연 경우) */
 async function afterLogin({ keepNav = false } = {}) {
   S.authErr = '';
@@ -1933,9 +2168,10 @@ async function afterLogin({ keepNav = false } = {}) {
     else { S.cache = EMPTY_CACHE(); S.ix = buildIndex(S.cache); toast(isNet(e) ? NET_MSG : e.message, true); }
   }
   render(); ensureTrap(); onEnterRoute();
-  S.recentSites = store.get('gaya-sites', S.recentSites || []);
+  S.recentSites = store.get('gaya-sites', S.recentSites || []); S.mySites = store.get('gaya-mysites', []);
   S.api.txList({ limit: 80 }).then(l => { S.recentSites = [...new Set([...l.map(t => t.site).filter(Boolean), ...S.recentSites])].slice(0, 40); store.set('gaya-sites', S.recentSites); }).catch(() => {});
   openDeep();
+  if (!store.get('gaya-tour', false) && !S.sheet) { store.set('gaya-tour', true); openSheet('tour', { step: 0 }); } // 이 기기에서 처음 로그인했을 때 한 번
 }
 function findLoc(code) { code = String(code || '').trim().toUpperCase(); if (!code) return null; return (S.cache ? S.cache.locations : []).find(l => (l.code || '').toUpperCase() === code || l.id === code) || null; }
 /* QR 라벨 주소(?loc=코드)로 열린 경우: 시작할 때 주소에서 떼어 두었다가 화면이 준비되면 그 위치를 연다 */
@@ -1964,7 +2200,7 @@ async function uploadFiles(files) {
   render();
   const moved = lastTarget && lastTarget !== fid;
   if (fails.length) toast((ok ? ok + '개 올림 · ' : '') + fails.length + '개 실패 — ' + fails.join(' / '), true);
-  else toast(ok + '개 올렸습니다' + (moved ? ' · ' + folderPathText(lastTarget) + ' 폴더로 정리됨' : ''));
+  else toast(ok + '개 올렸습니다' + (moved ? ' · ' + folderPathText(lastTarget) + ' 폴더로 정리됨' : ''), false, null, moved);
 }
 async function pickPhoto(file) {
   if (!file) return; const t = S.photoTarget; if (!t) return;
@@ -2028,7 +2264,7 @@ async function boot() {
   S.api = DEMO ? makeDemoAPI() : makeLiveAPI();
   const cu = DEMO ? null : store.get('gaya-user', null), cc = DEMO ? null : store.get('gaya-cache', null);
   if (cu && cc && cu.status === 'active') {
-    S.user = cu; S.cache = cc; S.ix = buildIndex(cc); S.recentSites = store.get('gaya-sites', []); S.fromCache = true;
+    S.user = cu; S.cache = cc; S.ix = buildIndex(cc); S.recentSites = store.get('gaya-sites', []); S.mySites = store.get('gaya-mysites', []); S.fromCache = true;
     render(); ensureTrap(); openDeep();
   } else { S.booting = !DEMO; render(); }
   if (!online()) { S.waitOnline = true; S.booting = false; render(); } // 연결되면 자동으로 확인한다
