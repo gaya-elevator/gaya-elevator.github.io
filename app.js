@@ -10,7 +10,7 @@ const CONFIG = Object.assign({
   STORAGE_WARN: 0.8
 }, window.GAYA_CONFIG || {});
 const DEMO = !CONFIG.SUPABASE_URL;
-const APP_VER = '2946f48d';
+const APP_VER = '7f8bfcb5';
 
 /* ───────── 작은 도구들 ───────── */
 const $ = (s, r = document) => r.querySelector(s);
@@ -1413,7 +1413,9 @@ const total = id => (S.ix.byItem.get(id) || []).reduce((a, s) => a + s.qty, 0);
 const isLow = it => it.min_qty > 0 && total(it.id) < it.min_qty;
 const pathOf = (map, id) => { const out = []; let n = map.get(id); while (n) { out.unshift(n); n = map.get(n.parent_id); } return out; };
 const locPathText = id => pathOf(S.ix.loc, id).map(l => l.name).join(' › ');
-const locCode = id => { const l = S.ix.loc.get(id); return l ? (l.code || l.name) : '?'; };
+// 위치는 어디서나 이름으로 보인다 (라벨 번호 l.code 는 QR 라벨용이라 화면에 내놓지 않는다)
+const locCode = id => S.ix.loc.has(id) ? locPathText(id) : '?';
+const locHtml = id => { const p = pathOf(S.ix.loc, id); if (!p.length) return '?'; const rest = p.slice(1).map(x => esc(x.name)).join(' › '); return `<span class="lname"><span class="lz">${esc(p[0].name)}</span>${rest}</span>`; }; // [구역] 선반 1 › 상
 const catPathText = id => pathOf(S.ix.cat, id).map(c => c.name).join(' › ');
 const folderPathText = id => pathOf(S.ix.folder, id).map(f => f.name).join(' › ');
 const personName = id => (S.ix.person.get(id) || {}).name || '알 수 없음';
@@ -1618,6 +1620,7 @@ document.addEventListener('input', e => {
   if (el.dataset.ordq) { const r = orderRows().find(x => x.id === el.dataset.ordq); if (r) { r.qty = isInt(el.value) ? +el.value : 0; orderSave(); } }
   if (el.id === 'q-items') { S.q = el.value; searchItems(); }
   if (el.id === 'q-docs') { S.docsQ = el.value; searchDocs(); }
+  if (el.id === 'code-in') { S.locQ = el.value; clearTimeout(hT); hT = setTimeout(() => { const b = $('#loc-res'); if (b) b.innerHTML = locResults(S.locQ); const dm = $('#scan-demo'); if (dm) dm.hidden = !!S.locQ.trim(); }, 120); }
   if (el.id === 'bulk-in' && S.bulk) S.bulk.text = el.value;
   if (el.id === 'q-hist') { S.histQ = el.value; clearTimeout(hT); hT = setTimeout(updatePane, 120); }
   if (el.id === 'q-sites') { S.sitesQ = el.value; clearTimeout(hT); hT = setTimeout(updatePane, 120); }
@@ -1871,14 +1874,15 @@ function itemList(items, qtyOf, sub, outLoc) {
 }
 const LOC_KIND = { zone: ['pin', '구역'], unit: ['shelf', '캐비넷·선반'], slot: ['slot', '칸'] }; // 위치 단계: 아이콘 · 이름
 const locKind = l => LOC_KIND[l && l.kind] || LOC_KIND.zone;
+const locLine = (l, s = '') => `<button class="lrow k-${esc(l.kind || 'zone')}" data-act="loc" data-id="${l.id}"><span class="ic">${ic(locKind(l)[0])}</span><div class="main"><span class="t">${locHtml(l.id)}</span><span class="s">${locKind(l)[1]}${s}</span></div><span class="chev">${ic('chev')}</span></button>`; // [구역] 선반 1 › 상 + 단계
 const locRow = (l, extra = '') => {
   const ids = descLocs(l.id); const items = new Set();
   ids.forEach(id => (S.ix.byLoc.get(id) || []).forEach(s => items.add(s.item_id)));
   return `<button class="lrow k-${esc(l.kind || 'zone')}" data-act="loc" data-id="${l.id}"><span class="ic">${ic(locKind(l)[0])}</span>
     <div class="main"><span class="t">${esc(l.name)}</span><span class="s">${locKind(l)[1]} · ${items.size}품목${extra}</span></div>
-    ${l.code ? `<span class="tape">${esc(l.code)}</span>` : ''}<span class="chev">${ic('chev')}</span></button>`;
+    <span class="chev">${ic('chev')}</span></button>`;
 };
-const tapesOf = it => `<span class="tapes">${(S.ix.byItem.get(it.id) || []).map(s => `<span class="tape">${esc(locCode(s.location_id))} · ${s.qty}</span>`).join('') || '<span class="s">재고 없음</span>'}</span>`;
+const tapesOf = it => `<span class="tapes">${(S.ix.byItem.get(it.id) || []).map(s => `<span class="lchip">${locHtml(s.location_id)}<b>${s.qty}</b></span>`).join('') || '<span class="s">재고 없음</span>'}</span>`;
 
 /* 내가 최근에 자주 입출고한 품목 6개 (많이 쓴 순, 같으면 최근 순) */
 function myItems(tx) {
@@ -1928,8 +1932,8 @@ VIEW['items.browse'] = r => {
       const kids = S.ix.locKids.get(node) || [];
       actions = can(S.user, 'location') ? `<button class="iconbtn" data-act="locEdit" data-id="${l.id}" aria-label="위치 수정" data-write>${ic('edit')}</button>` : '';
       pane = `<section class="hero" style="flex-direction:row;gap:14px;align-items:center">
-          <div class="photo" style="width:68px;height:68px">${l.photo ? `<img src="${esc(l.photo)}" alt="">` : ic('shelf')}</div>
-          <div style="flex:1;min-width:0;display:flex;flex-direction:column;gap:6px">${l.code ? `<span class="tape lg" style="align-self:flex-start">${esc(l.code)}</span>` : ''}<span class="muted" style="font-size:13.5px">${esc(locPathText(node))}</span></div>
+          <div class="photo" style="width:68px;height:68px">${l.photo ? `<img src="${esc(l.photo)}" alt="">` : ic(locKind(l)[0])}</div>
+          <div style="flex:1;min-width:0;display:flex;flex-direction:column;gap:6px"><span class="kindtag k-${esc(l.kind || 'zone')}">${ic(locKind(l)[0])}${locKind(l)[1]}</span><span style="font-size:14px;font-weight:600">${locHtml(node)}</span></div>
           <div class="herobtns"><button class="btn sm" data-act="labelsFor" data-id="${l.id}">${ic('qr')}라벨</button>${can(S.user, 'adjust') ? `<button class="btn sm" data-act="countOpen" data-id="${l.id}" data-write>${ic('check')}실사</button>` : ''}</div></section>
         ${can(S.user, 'adjust') && countChanges(node).out.length ? `<button class="notice warn" data-act="countOpen" data-id="${l.id}" style="border:0;text-align:left;width:100%;cursor:pointer">${ic('warn')}<span>실사하던 수량 <b>${countChanges(node).out.length}개</b>가 아직 저장되지 않았습니다. 눌러서 이어서 하세요.</span></button>` : ''}
         ${kids.length ? `<section class="sec box tone-blue"><div class="sec-h">${hh('안쪽 위치', 'pin')}</div><div class="ledger">${kids.map(k => locRow(k)).join('')}</div></section>` : ''}
@@ -1963,7 +1967,7 @@ function histRows(list) {
     if (k === 'etc' ? !['cancel', 'adjust'].includes(t.type) : k && t.type !== k) return false;
     if (!q) return true;
     const it = S.ix.item.get(t.item_id);
-    const hay = [it && it.name, it && it.spec, it && it.maker, t.site, t.note, personName(t.user_id), t.from_loc && locCode(t.from_loc), t.to_loc && locCode(t.to_loc), t.from_loc && locPathText(t.from_loc), t.to_loc && locPathText(t.to_loc)].join(' ').toLowerCase();
+    const hay = [it && it.name, it && it.spec, it && it.maker, t.site, t.note, personName(t.user_id), t.from_loc && locPathText(t.from_loc), t.to_loc && locPathText(t.to_loc), ...[t.from_loc, t.to_loc].map(x => x && (S.ix.loc.get(x) || {}).code)].join(' ').toLowerCase();
     return q.split(/\s+/).every(w => kmatch(hay, w));
   });
 }
@@ -2037,7 +2041,7 @@ VIEW['items.count'] = r => {
   const rows = ids.map(id => { const it = S.ix.item.get(id); const cur = qtyAt(id, r.node); const v = c.vals[id] ?? ''; const ch = isInt(v) && +v !== cur;
     return `<div class="crow ${ch ? 'chg' : ''} ${String(v).trim() !== '' && !isInt(v) ? 'bad' : ''}"><div class="main"><span class="t">${esc(itemTitle(it))}</span><span class="s was">${ch ? `기록 ${cur} → ${+v}` : `기록 ${cur}`}</span></div>
       <div class="ministep big"><button type="button" data-act="cntStep" data-id="${id}" data-d="-1" aria-label="하나 빼기">−</button><input id="cnt-${id}" data-cnt="${id}" data-nokeep inputmode="numeric" value="${esc(v)}" placeholder="${cur}" aria-label="${esc(itemTitle(it))} 실제 수량" autocomplete="off"><button type="button" data-act="cntStep" data-id="${id}" data-d="1" aria-label="하나 더하기">+</button></div><span class="unit">${esc(it.unit)}</span></div>`; }).join('');
-  const body = `<section class="hero" style="flex-direction:row;gap:12px;align-items:center">${l.code ? `<span class="tape lg">${esc(l.code)}</span>` : ''}<span class="muted" style="font-size:13.5px;flex:1;min-width:0">${esc(locPathText(l.id))}</span></section>
+  const body = `<section class="hero" style="flex-direction:row;gap:12px;align-items:center"><span class="kindtag k-${esc(l.kind || 'zone')}">${ic(locKind(l)[0])}${locKind(l)[1]}</span><span style="font-size:14px;font-weight:600;flex:1;min-width:0">${locHtml(l.id)}</span></section>
     ${Object.values(c.vals).some(v => String(v).trim() !== '') && c.at && Date.now() - c.at > 6 * 36e5 ? `<div class="notice warn">${ic('clock')}<span>이 폰에 <b>${fmtWhen(new Date(c.at).toISOString())}</b>에 적어 둔 수량이 남아 있습니다. 그 뒤로 입출고가 있었다면 「처음대로」를 누르고 다시 세세요.</span></div>` : ''}
     <div class="notice">${ic('info')}<span>선반에 <b>실제로 있는 수량</b>을 세어 적으세요. 비워 둔 칸은 그대로 두고, 바뀐 품목만 「수량 정정(실사)」으로 저장됩니다. 적던 수량은 저장 전까지 이 폰에 남아 있습니다.</span></div>
     <section class="sec"><div class="sec-h"><h2>이 위치의 품목</h2><span class="aside">${ids.length}가지</span></div><div class="ledger countlist">${rows || empty('box', '이 위치에 등록된 품목이 없습니다.', '아래에서 품목을 찾아 넣으세요.')}</div></section>
@@ -2069,14 +2073,15 @@ VIEW['items.order'] = () => {
 
 function txRow(t, withItem = false) {
   const it = S.ix.item.get(t.item_id); const unit = it ? it.unit : '';
-  const where = t.type === 'in' ? '→ ' + locCode(t.to_loc) : t.type === 'out' ? '← ' + locCode(t.from_loc) : t.type === 'move' ? locCode(t.from_loc) + ' → ' + locCode(t.to_loc) : t.type === 'adjust' ? '@' + locCode(t.from_loc) + ' ' + t.before + '→' + t.after : '원상복구';
+  const L = id => S.ix.loc.has(id) ? locHtml(id) : '(지운 위치)'; // 위치는 이름으로: [창고] 선반 1 › 상단
+  const where = t.type === 'in' ? '→ ' + L(t.to_loc) : t.type === 'out' ? '← ' + L(t.from_loc) : t.type === 'move' ? L(t.from_loc) + ' → ' + L(t.to_loc) : t.type === 'adjust' ? L(t.from_loc) + ' ' + t.before + '→' + t.after : '원상복구';
   const sign = t.type === 'in' ? '+' : t.type === 'out' ? '−' : t.type === 'adjust' ? (t.qty >= 0 ? '+' : '−') : '';
   const kcls = { in: 'k-in', out: 'k-out', move: 'k-move', cancel: 'k-cancel', adjust: 'k-adjust' }[t.type];
   const canC = !withItem && !t.canceled_by && ['in', 'out', 'move'].includes(t.type) && can(S.user, 'cancel', t);
   return `<div class="hrow ${t.canceled_by ? 'void' : ''}" ${withItem && it ? `data-act="item" data-id="${t.item_id}" role="button" tabindex="0" style="cursor:pointer"` : ''}>
     <span class="kind ${kcls}">${TX_NAME[t.type]}</span>
     <div class="d">${withItem ? `<div style="font-weight:600">${esc(itemTitle(it))}</div>` : ''}<span class="who">${esc(personName(t.user_id))}</span> <span class="meta">${fmtWhen(t.created_at)}</span>
-      <div class="meta"><span class="mono">${esc(where)}</span>${t.site ? ` · <button class="sitelink" data-act="site" data-v="${esc(parseSite(t.site).name || t.site)}">${esc(t.site)}</button>` : ''}${t.note ? ' · ' + esc(t.note) : ''}${t.canceled_by ? ' · 취소됨' : ''}</div></div>
+      <div class="meta"><span class="wh">${where}</span>${t.site ? ` · <button class="sitelink" data-act="site" data-v="${esc(parseSite(t.site).name || t.site)}">${esc(t.site)}</button>` : ''}${t.note ? ' · ' + esc(t.note) : ''}${t.canceled_by ? ' · 취소됨' : ''}</div></div>
     <span class="n">${sign}${Math.abs(t.qty)}${esc(unit)}</span>
     ${canC ? `<div class="ops"><button class="btn sm danger ghost" data-act="cancelTx" data-id="${t.id}" data-write>${ic('undo')}${t.type === 'out' ? '출고 취소 (안 씀)' : TX_NAME[t.type] + ' 취소'}</button></div>` : ''}
   </div>`;
@@ -2098,7 +2103,7 @@ VIEW['items.item'] = r => {
       <div class="actions3"><button class="btn in" data-act="txIn" data-id="${it.id}" data-write>${ic('in')}입고</button><button class="btn out" data-act="txOut" data-id="${it.id}" data-write ${t ? '' : 'disabled'}>${ic('out')}출고</button><button class="btn" data-act="txMove" data-id="${it.id}" data-write ${t ? '' : 'disabled'}>${ic('move')}이동</button></div>
     </section>
     <section class="sec box tone-blue"><div class="sec-h">${hh('위치별 수량', 'pin')}${adm ? `<button class="btn sm edit" data-act="txAdjust" data-id="${it.id}" data-write>수량 정정</button>` : ''}</div>
-      <div class="ledger">${rows.length ? rows.map(s => `<button class="lrow" data-act="loc" data-id="${s.location_id}"><div class="main"><span class="t"><span class="tape">${esc(locCode(s.location_id))}</span></span><span class="s">${esc(locPathText(s.location_id))}</span></div><span class="qty">${s.qty}<small>${u}</small></span><span class="chev">${ic('chev')}</span></button>`).join('') : empty('pin', '재고가 없습니다.', '「입고」로 넣을 위치와 수량을 기록하세요.')}</div></section>
+      <div class="ledger">${rows.length ? rows.map(s => { const L = S.ix.loc.get(s.location_id); return `<button class="lrow k-${esc((L && L.kind) || 'zone')}" data-act="loc" data-id="${s.location_id}"><span class="ic">${ic(locKind(L)[0])}</span><div class="main"><span class="t">${locHtml(s.location_id)}</span><span class="s">${locKind(L)[1]}</span></div><span class="qty">${s.qty}<small>${u}</small></span><span class="chev">${ic('chev')}</span></button>`; }).join('') : empty('pin', '재고가 없습니다.', '「입고」로 넣을 위치와 수량을 기록하세요.')}</div></section>
     <section class="sec box tone-amber"><div class="sec-h">${hh('메모', 'edit')}<button class="btn sm edit" data-act="memoEdit" data-id="${it.id}" data-write>${ic('edit')}${it.memo ? '고치기' : '적기'}</button></div>
       <div class="pad">${it.memo ? `<div class="memo">${esc(it.memo)}</div>` : `<div class="muted" style="font-size:14px">대체품, 보관 요령, 주의할 점 등을 적어 두면 모두가 봅니다.</div>`}</div></section>
     <section class="sec box tone-slate"><div class="sec-h">${hh('입출고 기록', 'history')}<span class="aside">최근 50건</span></div>
@@ -2202,13 +2207,24 @@ VIEW['docs.doc'] = r => {
 
 /* ───────── 스캔 ───────── */
 VIEW['scan.scan'] = () => {
-  const units = S.cache.locations.filter(l => l.code && l.kind !== 'zone');
+  const units = S.cache.locations.filter(l => l.kind !== 'zone');
   return { title: 'QR 스캔', body: `<div class="scanbox" id="scanbox"><video id="scanvid" playsinline muted hidden></video><div class="frame"></div><div class="msg" id="scanmsg">${esc(S.scanMsg || '카메라를 켜는 중…')}</div></div>
     ${S.scanErr && !DEMO ? `<button class="btn block" data-act="scanRetry">${ic('scan')}카메라 다시 켜기</button>` : ''}
     <p class="muted" style="margin:0;font-size:13.5px">캐비넷·선반에 붙은 QR 라벨을 네모 안에 맞추면 그 위치의 자재가 바로 열립니다.</p>
-    <form class="toolbar" data-submit="codeGo"><div class="search grow">${ic('tag')}<input id="code-in" name="code" placeholder="라벨 코드 직접 입력 (예: WH-S1-상)" autocapitalize="characters" autocomplete="off" enterkeyhint="go" aria-label="라벨 코드"></div><button class="btn primary" style="min-height:50px">열기</button></form>
-    ${DEMO ? `<section class="sec box tone-slate"><div class="sec-h">${hh('체험판 · 라벨 골라서 스캔 흉내', 'qr')}</div><div class="ledger">${units.map(l => `<button class="lrow k-${esc(l.kind)}" data-act="loc" data-id="${l.id}"><span class="ic">${ic(locKind(l)[0])}</span><div class="main"><span class="t">${esc(l.name)}</span><span class="s">${locKind(l)[1]} · ${esc(locPathText(l.id))}</span></div><span class="tape">${esc(l.code)}</span><span class="chev">${ic('chev')}</span></button>`).join('')}</div></section>` : ''}` };
+    <form class="toolbar" data-submit="codeGo"><div class="search grow">${ic('search')}<input id="code-in" name="code" value="${esc(S.locQ || '')}" placeholder="QR이 안 찍히면 위치 이름으로 찾기 (예: 선반 1 상)" autocomplete="off" enterkeyhint="search" aria-label="위치 이름으로 찾기"></div></form>
+    <div id="loc-res">${locResults(S.locQ)}</div>
+    ${DEMO ? `<section class="sec box tone-slate" id="scan-demo" ${String(S.locQ || '').trim() ? 'hidden' : ''}><div class="sec-h">${hh('체험판 · 라벨 골라서 스캔 흉내', 'qr')}</div><div class="ledger">${units.map(l => locLine(l)).join('')}</div></section>` : ''}` };
 };
+/* 위치 이름으로 찾기: 띄어 쓴 낱말이 모두 들어 있는 위치 (빈칸 무시, 라벨 번호로 찾아도 됨) */
+function findLocs(q) {
+  const ws = String(q || '').toLowerCase().split(/\s+/).map(w => w.replace(/[›>\/\\·,\-]/g, '')).filter(Boolean); if (!ws.length) return [];
+  return flatTree(S.ix.locKids).map(x => x.n).filter(l => { const hay = (locPathText(l.id) + ' ' + (l.code || '')).toLowerCase().replace(/[\s›>\/\\·,\-]/g, ''); return ws.every(w => hay.includes(w)); });
+}
+function locResults(q) {
+  if (!String(q || '').trim()) return '';
+  const rows = findLocs(q);
+  return `<section class="sec box tone-blue"><div class="sec-h">${hh('찾은 위치', 'pin')}<span class="aside">${rows.length}곳</span></div><div class="ledger">${rows.slice(0, 40).map(l => locLine(l)).join('') || empty('pin', '찾는 위치가 없습니다.', '구역·선반·칸 이름을 띄어서 적어 보세요. (예: 창고 선반 3)')}</div></section>`;
+}
 
 /* ───────── 알림 ───────── */
 VIEW['alerts.list'] = () => {
@@ -2322,9 +2338,9 @@ VIEW['more.status'] = () => {
 VIEW['more.places'] = () => {
   const rows = flatTree(S.ix.locKids);
   const body = `<div class="toolbar"><button class="btn sm primary" data-act="locBulk" data-write>${ic('plus')}한 번에 만들기</button><button class="btn sm add" data-act="locNew" data-write>${ic('plus')}구역 하나 추가</button><button class="btn sm" data-act="go" data-v="labels">${ic('qr')}QR 라벨 만들기</button></div>
-    <div class="ledger">${rows.map(({ n, depth }) => `<div class="lrow k-${esc(n.kind || 'zone')}" style="padding-left:${14 + depth * 20}px"><span class="ic">${ic(locKind(n)[0])}</span><div class="main"><span class="t">${esc(n.name)}</span><span class="s">${locKind(n)[1]}${n.code ? ` <span class="tape">${esc(n.code)}</span>` : ''}</span></div>
+    <div class="ledger">${rows.map(({ n, depth }) => `<div class="lrow k-${esc(n.kind || 'zone')}" style="padding-left:${14 + depth * 20}px"><span class="ic">${ic(locKind(n)[0])}</span><div class="main"><span class="t">${esc(n.name)}</span><span class="s">${locKind(n)[1]}</span></div>
       ${depth < 2 ? `<button class="btn sm add" data-act="locNew" data-parent="${n.id}" data-write aria-label="${esc(n.name)} 안에 추가">${ic('plus')}안에</button>` : ''}<button class="iconbtn" data-act="locEdit" data-id="${n.id}" data-write aria-label="수정">${ic('edit')}</button></div>`).join('')}</div>
-    <p class="muted" style="font-size:12.5px;margin:0">구역(예: 창고) › 캐비넷·선반(예: 선반 3) › 칸(예: 하단) 세 단계까지 만들 수 있습니다. 코드는 라벨에 크게 찍히는 짧은 이름입니다.</p>`;
+    <p class="muted" style="font-size:12.5px;margin:0">구역(예: 창고) › 캐비넷·선반(예: 선반 3) › 칸(예: 하단) 세 단계까지 만들 수 있습니다. 직원 화면에는 위치가 이름으로만 보입니다(예: <b>창고</b> 선반 3 › 하단).</p>`;
   return { title: '위치 관리', crumbs: moreCr('위치 관리'), body };
 };
 
@@ -2334,11 +2350,11 @@ VIEW['more.labels'] = r => {
   const chosen = rows.filter(x => sel.has(x.n.id)).map(x => x.n);
   const base = CONFIG.APP_URL || (location.origin + location.pathname);
   const body = `<details class="ledger" id="label-pick" ${S.labelsOpen ? 'open' : ''}><summary class="lrow" style="cursor:pointer"><span class="ic">${ic('check')}</span><div class="main"><span class="t">라벨 만들 위치 고르기</span><span class="s">${sel.size}곳 선택됨 · 눌러서 고르기</span></div><span class="chev">${ic('chev')}</span></summary>
-      ${rows.map(({ n, depth }) => `<label class="lrow" style="padding-left:${16 + depth * 20}px;cursor:pointer"><input type="checkbox" data-act="selLabel" data-id="${n.id}" ${sel.has(n.id) ? 'checked' : ''} style="width:22px;height:22px;flex:none;accent-color:var(--accent)"><div class="main"><span class="t">${esc(n.name)}</span></div>${n.code ? `<span class="tape">${esc(n.code)}</span>` : ''}</label>`).join('')}</details>
+      ${rows.map(({ n, depth }) => `<label class="lrow" style="padding-left:${16 + depth * 20}px;cursor:pointer"><input type="checkbox" data-act="selLabel" data-id="${n.id}" ${sel.has(n.id) ? 'checked' : ''} style="width:22px;height:22px;flex:none;accent-color:var(--accent)"><span class="ic" style="width:30px;height:30px">${ic(locKind(n)[0])}</span><div class="main"><span class="t">${esc(n.name)}</span><span class="s">${locKind(n)[1]}</span></div></label>`).join('')}</details>
     <div class="toolbar"><button class="btn primary" data-act="printLabels">${ic('docs')}인쇄</button><span class="muted" style="font-size:13px">A4에 인쇄해 잘라 붙이세요. 라벨지에 인쇄하면 더 오래갑니다.</span></div>
     ${DEMO ? `<div class="notice">${ic('info')}<span>체험판 화면에서는 인쇄 창이 열리지 않습니다. 실제 앱에서는 이 버튼으로 바로 인쇄됩니다.</span></div>` : ''}
     <p class="muted" style="font-size:12.5px;margin:0">화면에 보이는 QR은 같은 휴대폰으로 찍을 수 없으니, 라벨 아래 「열기」를 누르면 QR을 찍었을 때와 같은 위치 화면이 열립니다. 「열기」는 인쇄되지 않습니다.</p>
-    <div class="labels" id="labels">${chosen.map(l => `<div class="qrlabel"><span class="lh">${logo('logo')}가야엘리베이터</span>${qrSvg(base + '?loc=' + encodeURIComponent(l.code || l.id))}<span class="code">${esc(l.code || l.name)}</span><span class="nm">${esc(locPathText(l.id))}</span><button class="btn sm qropen noprint" data-act="loc" data-id="${l.id}">${ic('box')}열기</button></div>`).join('')}</div>`;
+    <div class="labels" id="labels">${chosen.map(l => `<div class="qrlabel"><span class="lh">${logo('logo')}가야엘리베이터</span>${qrSvg(base + '?loc=' + encodeURIComponent(l.code || l.id))}<span class="code">${esc(pathOf(S.ix.loc, l.id).slice(1).map(x => x.name).join(' › ') || l.name)}</span><span class="nm">${esc((pathOf(S.ix.loc, l.id)[0] || {}).name || '')}${l.code ? ` · ${esc(l.code)}` : ''}</span><button class="btn sm qropen noprint" data-act="loc" data-id="${l.id}">${ic('box')}열기</button></div>`).join('')}</div>`;
   return { title: 'QR 라벨', crumbs: crumbs([{ label: '더보기', act: 'tab', data: { t: 'more' } }, { label: '위치 관리', act: 'go', data: { v: 'places' } }, { label: 'QR 라벨' }]), body };
 };
 function qrSvg(text) {
@@ -2354,14 +2370,14 @@ VIEW['more.cats'] = () => {
   return { title: '분류 관리', crumbs: moreCr('분류 관리'), body };
 };
 
-const BULK_COLS = ['품명', '규격', '제조사', '적용 기종', '분류', '단위', '최소 재고', '위치 코드', '수량', '메모'];
+const BULK_COLS = ['품명', '규격', '제조사', '적용 기종', '분류', '단위', '최소 재고', '위치', '수량', '메모'];
 VIEW['more.bulk'] = () => {
   const b = S.bulk || (S.bulk = { text: '', rows: [] });
-  const body = `<div class="notice">${ic('info')}<span>「빈 양식 받기」로 받은 파일(또는 아래 순서대로 열을 만든 엑셀)에 품목을 채우고, 채운 칸을 드래그해 복사(Ctrl+C)한 뒤 아래 칸에 붙여 넣으세요(Ctrl+V). 제목 줄은 같이 복사해도 저절로 빠집니다. 분류와 위치 코드는 앱에 이미 있는 이름·코드와 같아야 연결됩니다.</span></div>
+  const body = `<div class="notice">${ic('info')}<span>「빈 양식 받기」로 받은 파일(또는 아래 순서대로 열을 만든 엑셀)에 품목을 채우고, 채운 칸을 드래그해 복사(Ctrl+C)한 뒤 아래 칸에 붙여 넣으세요(Ctrl+V). 제목 줄은 같이 복사해도 저절로 빠집니다. 분류와 위치는 앱에 이미 있는 이름과 같아야 연결됩니다. 위치는 「창고 선반 1 상」처럼 구역·선반·칸 이름을 띄어 적으세요.</span></div>
     <div class="toolbar"><button class="btn sm" data-act="bulkTemplate">${ic('download')}빈 양식 받기 (엑셀)</button><span class="muted" style="font-size:12.5px">열 순서가 맞춰진 빈 엑셀 파일입니다.</span></div>
-    <div class="scrollx"><table class="tbl"><tr>${BULK_COLS.map(c => `<th>${c}</th>`).join('')}</tr><tr><td>도어 롤러</td><td>Ø50 행거용</td><td>현대엘리베이터</td><td>STVF</td><td>롤러·슈</td><td>개</td><td>6</td><td>WH-S1-상</td><td>12</td><td></td></tr></table></div>
-    <details class="ledger"><summary class="lrow" style="cursor:pointer"><span class="ic">${ic('tag')}</span><div class="main"><span class="t">지금 앱에 있는 분류·위치 코드</span><span class="s">「분류」「위치 코드」 칸에 이 이름을 그대로 쓰세요</span></div><span class="chev">${ic('chev')}</span></summary>
-      <div class="reflist"><b>분류</b><div>${S.cache.categories.map(c => `<span class="chip">${esc(c.name)}</span>`).join('') || '<span class="muted">없음</span>'}</div><b>위치 코드</b><div>${S.cache.locations.filter(l => l.code).map(l => `<span class="tape">${esc(l.code)}</span>`).join('') || '<span class="muted">없음</span>'}</div></div></details>
+    <div class="scrollx"><table class="tbl"><tr>${BULK_COLS.map(c => `<th>${c}</th>`).join('')}</tr><tr><td>도어 롤러</td><td>Ø50 행거용</td><td>현대엘리베이터</td><td>STVF</td><td>롤러·슈</td><td>개</td><td>6</td><td>창고 선반 1 상</td><td>12</td><td></td></tr></table></div>
+    <details class="ledger"><summary class="lrow" style="cursor:pointer"><span class="ic">${ic('tag')}</span><div class="main"><span class="t">지금 앱에 있는 분류·위치</span><span class="s">「분류」「위치」 칸에 이 이름을 그대로 쓰세요</span></div><span class="chev">${ic('chev')}</span></summary>
+      <div class="reflist"><b>분류</b><div>${S.cache.categories.map(c => `<span class="chip">${esc(c.name)}</span>`).join('') || '<span class="muted">없음</span>'}</div><b>위치</b><div>${flatTree(S.ix.locKids).map(x => x.n).filter(l => l.kind !== 'zone').map(l => `<span class="chip">${esc(pathOf(S.ix.loc, l.id).map(x => x.name).join(' '))}</span>`).join('') || '<span class="muted">없음</span>'}</div></div></details>
     <div class="field"><label for="bulk-in">붙여 넣을 곳</label><textarea id="bulk-in" rows="6" placeholder="엑셀에서 복사한 내용을 여기에 붙여 넣으세요" data-act="noop">${esc(b.text)}</textarea></div>
     <button class="btn" data-act="bulkCheck">${ic('check')}미리 보기</button>
     ${b.rows.length ? `<section class="sec"><div class="sec-h"><h2>미리 보기</h2><span class="aside">${b.rows.length}줄 · 문제 ${b.rows.filter(r => r.warn).length}줄</span></div>
@@ -2386,8 +2402,8 @@ VIEW['more.guide'] = () => {
     <h3>폰 알림</h3><ol><li>더보기 › <b>폰 알림 받기</b>를 켜고 「허용」을 누르면, 앱을 닫아 두어도 ${adm ? '재고 부족 · 가입 신청 · 댓글' : '내 자재·자료에 달린 댓글'} 알림이 폰에 뜹니다. 알림을 누르면 그 화면이 열립니다.</li><li>아이폰은 <b>홈 화면에 추가한 앱 아이콘</b>으로 열었을 때만 켤 수 있습니다 (iOS 16.4 이상).</li><li>폰 설정에서 알림을 막았다면 폰 설정 › 알림(또는 브라우저 › 사이트 설정 › 알림)에서 허용한 뒤 다시 켜세요. 로그아웃하면 그 폰으로 오던 알림은 끊깁니다.</li></ol>
     <h3>자료 쓰는 법</h3><ol><li>자료 탭에서 폴더를 열고 <b>올리기</b>로 PDF·엑셀·사진을 그대로 올립니다.</li><li>검색창에 에러코드나 부품명을 치면 파일 안의 글자까지 찾아 줍니다.</li><li>교육 영상은 유튜브에 「일부 공개」로 올린 뒤 <b>영상·링크</b>로 주소만 등록합니다.</li><li>자주 보는 자료는 파일 화면 오른쪽 위 <b>☆</b>를 누르면 자료 탭의 <b>「내 저장함」</b>에 모이고 폰에도 저장됩니다. 전파가 없는 기계실·피트에서도 열리고, 내 폴더를 만들어 정리할 수 있습니다(이 휴대폰에만 저장).</li><li>지난 입출고는 자재 첫 화면 위쪽 바로가기 <b>「입출고 기록」</b>에서, 현장마다 쓴 자재는 <b>「현장별 이력」</b>에서 봅니다.</li>${adm ? '<li>폴더 안 <b>폴더 설정</b>(관리자)에서 이름 · 날짜별 자동 정리 · 파일 순서(최근 올린 순/이름 순) · 새 자료 알림을 언제든 바꿉니다. 새 자료 알림을 켠 폴더에 자료가 올라오면 모든 직원에게 알림이 갑니다.</li>' : ''}</ol>
     ${adm ? `<h3>가입 승인과 퇴사자</h3><ol><li>더보기 › 직원 관리에서 이름·사내번호를 확인하고 승인합니다.</li><li>비밀번호를 잊은 직원은 이름을 눌러 <b>비밀번호 초기화</b> → 화면에 뜬 임시 번호 6자리를 알려 줍니다. 직원이 그 번호로 로그인하면 <b>새 비밀번호를 정하는 화면</b>이 먼저 나오고, 정해야 앱으로 들어갑니다.</li><li>퇴사자는 지우지 않고 <b>사용 중지</b>합니다. 그 사람이 남긴 입출고 기록은 그대로 남습니다.</li></ol>
-    <h3>처음 입력하는 순서</h3><ol><li>더보기 › 위치 관리 › <b>한 번에 만들기</b>: 구역 › 캐비넷·선반 번호 범위 › 칸을 고르면 QR 코드까지 한꺼번에 생기고, 바로 라벨 인쇄 화면으로 갑니다.</li><li>더보기 › <b>품목 대량 등록</b>: 「빈 양식 받기」로 받은 엑셀에 채워 붙여 넣습니다. 위치 코드와 수량을 적으면 입고 기록까지 함께 남습니다.</li><li>하나씩 넣을 때는 자재 탭 <b>품목 추가</b>: <b>지금 있는 수량</b>에 개수를 적고 놓인 위치를 고르면 입고까지 한 번에 됩니다. <b>분류</b>는 자재를 종류별로 묶는 이름표(선택)이고, 「＋ 새 분류 만들기」로 그 자리에서 만들 수 있습니다.</li><li>이미 등록한 품목을 분류에 한꺼번에 넣을 때는 자재 › 분류별 › 그 분류(예: 도어 부품) › <b>분류 설정</b> → 「분류 없음」(또는 「다른 분류」)에서 품목을 체크하고 <b>고른 n개 가져오기</b>를 누릅니다. 분류 이름 바꾸기·지우기도 여기서 합니다.</li><li>선반마다 실제 수량을 맞출 때는 그 선반 화면의 <b>실사</b>를 누르고 세어 적습니다. 다 적으면 「다음 선반」 → QR을 찍으면 바로 다음 실사 화면입니다. 적던 수량은 저장 전까지 이 폰에 남습니다.</li></ol>
-    <h3>위치 추가와 QR 라벨</h3><ol><li>더보기 › 위치 관리에서 캐비넷·선반을 추가하고 짧은 코드(예: WH-S5)를 붙입니다. 코드에는 빈칸을 넣지 않습니다.</li><li>QR 라벨 만들기 → 인쇄 → 선반에 붙입니다. 앱의 <b>스캔</b> 탭으로 찍으면 그 선반 화면이 바로 열립니다. (안드로이드는 폰 기본 카메라로 찍어도 열립니다. 아이폰은 기본 카메라로 찍으면 사파리에서 열려 로그인을 따로 해야 하니 앱의 스캔 탭을 쓰세요.)</li></ol>
+    <h3>처음 입력하는 순서</h3><ol><li>더보기 › 위치 관리 › <b>한 번에 만들기</b>: 구역 › 캐비넷·선반 번호 범위 › 칸을 고르면 위치가 한꺼번에 생기고, 바로 라벨 인쇄 화면으로 갑니다.</li><li>더보기 › <b>품목 대량 등록</b>: 「빈 양식 받기」로 받은 엑셀에 채워 붙여 넣습니다. 위치 코드와 수량을 적으면 입고 기록까지 함께 남습니다.</li><li>하나씩 넣을 때는 자재 탭 <b>품목 추가</b>: <b>지금 있는 수량</b>에 개수를 적고 놓인 위치를 고르면 입고까지 한 번에 됩니다. <b>분류</b>는 자재를 종류별로 묶는 이름표(선택)이고, 「＋ 새 분류 만들기」로 그 자리에서 만들 수 있습니다.</li><li>이미 등록한 품목을 분류에 한꺼번에 넣을 때는 자재 › 분류별 › 그 분류(예: 도어 부품) › <b>분류 설정</b> → 「분류 없음」(또는 「다른 분류」)에서 품목을 체크하고 <b>고른 n개 가져오기</b>를 누릅니다. 분류 이름 바꾸기·지우기도 여기서 합니다.</li><li>선반마다 실제 수량을 맞출 때는 그 선반 화면의 <b>실사</b>를 누르고 세어 적습니다. 다 적으면 「다음 선반」 → QR을 찍으면 바로 다음 실사 화면입니다. 적던 수량은 저장 전까지 이 폰에 남습니다.</li></ol>
+    <h3>위치 추가와 QR 라벨</h3><ol><li>더보기 › 위치 관리에서 캐비넷·선반·칸을 추가합니다. 이름만 정하면 되고, 직원 화면에는 「<b>창고</b> 선반 3 › 하단」처럼 이름으로 보입니다.</li><li>QR 라벨 만들기 → 인쇄 → 선반에 붙입니다. 앱의 <b>스캔</b> 탭으로 찍으면 그 선반 화면이 바로 열립니다. (안드로이드는 폰 기본 카메라로 찍어도 열립니다. 아이폰은 기본 카메라로 찍으면 사파리에서 열려 로그인을 따로 해야 하니 앱의 스캔 탭을 쓰세요.)</li></ol>
     <h3>빨간 불이 켜졌을 때 (시스템 상태)</h3><ol><li>직원들이 앱을 평소처럼 쓰고 있다면 급한 일은 아닙니다. 앱을 쓰는 것만으로도 서버는 깨어 있습니다.</li><li>회사용 구글 계정(gaya.elevator.app)에 로그인해 보안 경고나 계정 잠김 안내가 있는지 봅니다.</li><li>그래도 계속 빨간 불이면 개발자(재석)에게 연락합니다.</li><li>앱이 아예 열리지 않고 「서버가 쉬고 있습니다」라고 나오면: supabase.com 에 소유자 계정으로 로그인 → 가야엘리베이터 조직 › gaya-app 프로젝트 → <b>Resume project</b> 를 누르고 몇 분 기다립니다. 멈춘 뒤 1년 안이면 데이터는 그대로입니다.</li></ol>
     <h3>재고 부족 알리기와 기록 받기</h3><ol><li>자재 첫 화면 「재고 부족」의 <b>목록 보내기</b>를 누르면 부족한 품목 목록을 카톡 등으로 바로 보낼 수 있습니다.</li><li>입출고 기록 화면 오른쪽 위 <b>엑셀</b>을 누르면 그 달 기록(검색·종류로 거른 그대로)이 엑셀 파일로 받아집니다.</li><li>자재 첫 화면 바로가기 <b>「발주·입고」</b>: 부족한 만큼 미리 채운 발주 목록을 거래처에 보내고, 자재가 들어오면 「한 번에 입고」로 체크한 품목을 위치별로 한꺼번에 넣습니다.</li></ol>
     <h3>최소 재고 정하기 · 직원 안내문</h3><ol><li>더보기 › <b>사용 통계</b>: 많이 나간 자재와 현장별 사용량을 달마다 봅니다. 아래 「최소 재고 추천」은 최근 3개월 한 달 평균만큼을 권합니다. 체크한 것만 반영됩니다.</li><li>더보기 › <b>직원 안내문 인쇄</b>: 앱 주소 QR과 쓰는 법이 든 A4 한 장입니다. 새 직원에게는 「앱 주소 보내기」로 카톡 링크를 보내면 됩니다.</li></ol>
@@ -2465,10 +2481,10 @@ const stepper = (k, v) => `<div class="stepper"><button type="button" data-act="
 function locPicker(k, sel, { onlyWith, qtyOf, exclude } = {}) {
   const rows = flatTree(S.ix.locKids).filter(({ n }) => (!onlyWith || onlyWith.has(n.id)) && n.id !== exclude);
   if (!rows.length) return `<div class="notice">${ic('info')}<span>${onlyWith ? '재고가 있는 위치가 없습니다.' : '고를 수 있는 위치가 없습니다. 관리자가 더보기 › 위치 관리에서 먼저 위치를 만들어야 합니다.'}</span></div>`;
-  // 단계마다 모양이 다르다: 구역 = 회색 띠·굵게·핀 / 캐비넷·선반 = 선반 아이콘 / 칸 = 작게·서랍 아이콘. 라벨 코드는 오른쪽
-  return `<div class="pickgrid" role="listbox">${rows.map(({ n, depth }) => { const [icn, kn] = locKind(n), tape = n.code ? `<span class="tape">${esc(n.code)}</span>` : '';
+  // 단계마다 모양이 다르다: 구역 = 회색 띠·굵게·핀 / 캐비넷·선반 = 선반 아이콘 / 칸 = 작게·서랍 아이콘. 라벨 번호는 보이지 않는다
+  return `<div class="pickgrid" role="listbox">${rows.map(({ n, depth }) => { const [icn, kn] = locKind(n);
     return `<button type="button" class="pick lp k-${esc(n.kind || 'zone')}" data-act="pick" data-k="${k}" data-v="${n.id}" aria-pressed="${sel === n.id}" style="padding-left:${12 + (onlyWith ? 0 : depth * 18)}px">
-    <span class="lic">${ic(icn)}</span><div class="main"><span class="nm">${esc(onlyWith ? locPathText(n.id) : n.name)}</span><span class="kd">${kn}${qtyOf && tape ? ' · ' + tape : ''}</span></div>${qtyOf ? `<span class="qty">${qtyOf(n.id)}</span>` : tape}</button>`; }).join('')}</div>`;
+    <span class="lic">${ic(icn)}</span><div class="main"><span class="nm">${onlyWith ? locHtml(n.id) : esc(n.name)}</span><span class="kd">${kn}</span></div>${qtyOf ? `<span class="qty">${qtyOf(n.id)}</span>` : ''}</button>`; }).join('')}</div>`;
 }
 const sheetHead = (t, sub = '') => `<div class="sheet-h"><h3 id="sheet-t">${esc(t)}</h3><button class="iconbtn" data-act="sheetClose" aria-label="닫기">${ic('x')}</button></div>${sub ? `<div class="sub">${sub}</div>` : ''}`;
 const sheetErr = () => S.sheet.err ? `<div class="notice crit" role="alert">${ic('warn')}<span>${esc(S.sheet.err)}</span></div>` : '';
@@ -2522,7 +2538,7 @@ function sheetView() {
         ${sheetErr()}${okBtn('입고 ' + qn + unit, 'in')}`;
       break;
     case 'out':
-      h = sheetHead('출고', esc(itemTitle(it))) + `<div class="field"><span class="lab">꺼내는 위치</span>${d.quick && d.location_id ? `<div class="fixedloc"><span class="tape">${esc(locCode(d.location_id))}</span><span class="p">${esc(locPathText(d.location_id))}</span><button type="button" class="btn sm ghost" data-act="outFull">바꾸기</button></div>` : locPicker('location_id', d.location_id, { onlyWith: withStock(), qtyOf: stockAt })}</div>
+      h = sheetHead('출고', esc(itemTitle(it))) + `<div class="field"><span class="lab">꺼내는 위치</span>${d.quick && d.location_id ? `<div class="fixedloc"><span class="p">${locHtml(d.location_id)}</span><button type="button" class="btn sm ghost" data-act="outFull">바꾸기</button></div>` : locPicker('location_id', d.location_id, { onlyWith: withStock(), qtyOf: stockAt })}</div>
         <div class="field"><span class="lab">수량 (${esc(unit)})${d.location_id ? ' · 이 위치에 ' + stockAt(d.location_id) + esc(unit) : ''}</span>${stepper('qty', d.qty)}</div>
         ${siteFields(d)}
         <div class="field"><label for="sh-note">메모 (선택)</label><input id="sh-note" maxlength="200" data-bind="note" value="${esc(d.note || '')}"></div>
@@ -2601,7 +2617,7 @@ function sheetView() {
       break;
     case 'loc':
       h = sheetHead(d.id ? '위치 수정' : (d.parent_id ? locPathText(d.parent_id) + ' 안에 추가' : '구역 추가')) + `<div class="field"><label for="sh-lname">이름</label><input id="sh-lname" maxlength="100" data-bind="name" value="${esc(d.name || '')}" placeholder="${d.parent_id ? '예: 선반 5, 하단' : '예: 창고'}" data-autofocus></div>
-        <div class="field"><label for="sh-code">라벨 코드</label><input id="sh-code" maxlength="40" data-bind="code" value="${esc(d.code || '')}" placeholder="예: WH-S5" autocapitalize="characters" autocomplete="off"><span class="hint">QR 라벨에 크게 찍히는 짧은 이름입니다. 겹치지 않게 정하세요.</span></div>
+        <details class="adv" ${d.code ? 'open' : ''}><summary>라벨 번호 (선택 · 몰라도 됩니다)</summary><div class="field"><label for="sh-code" class="sr">라벨 번호</label><input id="sh-code" maxlength="40" data-bind="code" value="${esc(d.code || '')}" placeholder="비워 두어도 됩니다" autocapitalize="characters" autocomplete="off"><span class="hint">QR 라벨 아래에 작게 찍히는 번호입니다. 직원 화면에는 보이지 않고, 비워 두어도 QR은 그대로 됩니다.</span></div></details>
         <div class="field"><span class="lab">사진 (선택)</span><div class="toolbar"><div class="photo" style="width:68px;height:68px">${d.photo ? `<img src="${esc(d.photo)}" alt="">` : ic('shelf')}</div><button type="button" class="btn sm" data-act="sheetPhoto">${ic('cam')}${d.photo ? '사진 바꾸기' : '사진 찍기'}</button></div></div>
         ${sheetErr()}${okBtn(d.id ? '저장' : '추가')}
         ${d.id ? `<button class="btn danger block" data-act="locDelete" data-id="${d.id}" data-write>${ic('trash')}위치 삭제</button>` : ''}`;
@@ -2656,7 +2672,7 @@ function sheetView() {
       const rows = cart(); const sq = (r, i) => d['cq_' + i] ?? String(r.qty);
       h = sheetHead('한 번에 출고', `담은 자재 ${rows.length}가지 · 현장은 한 번만 적으면 됩니다`)
         + `<div class="ledger cartlist">${rows.map((r, i) => { const it = S.ix.item.get(r.item_id); const have = ((S.ix.byItem.get(r.item_id) || []).find(x => x.location_id === r.location_id) || {}).qty || 0;
-          return `<div class="crow ${isInt(sq(r, i), 1) && +sq(r, i) <= have ? '' : 'bad'}"><div class="main"><span class="t">${esc(itemTitle(it))}</span><span class="s"><span class="tape">${esc(locCode(r.location_id))}</span> 이 위치에 ${have}${esc(it ? it.unit : '')}</span></div>
+          return `<div class="crow ${isInt(sq(r, i), 1) && +sq(r, i) <= have ? '' : 'bad'}"><div class="main"><span class="t">${esc(itemTitle(it))}</span><span class="s">${locHtml(r.location_id)} · 이 위치에 ${have}${esc(it ? it.unit : '')}</span></div>
             <div class="ministep"><button type="button" data-act="cartStep" data-i="${i}" data-d="-1" aria-label="하나 빼기">−</button><input id="cq-${i}" data-bind="cq_${i}" inputmode="numeric" value="${esc(sq(r, i))}" aria-label="수량" autocomplete="off"><button type="button" data-act="cartStep" data-i="${i}" data-d="1" aria-label="하나 더하기">+</button></div>
             <button type="button" class="iconbtn" data-act="cartDel" data-i="${i}" aria-label="빼기">${ic('x')}</button></div>`; }).join('') || empty('box', '담은 자재가 없습니다.')}</div>
           ${siteFields(d)}
@@ -2666,11 +2682,11 @@ function sheetView() {
     }
     case 'locBulk': {
       const zones = S.ix.locKids.get(null) || [];
-      h = sheetHead('위치 한 번에 만들기', '구역 › 캐비넷·선반 › 칸 을 한꺼번에 만들고 QR 라벨 코드도 붙입니다')
-        + `<div class="field"><span class="lab">① 어디에</span><div class="pickgrid" style="max-height:none">${[['', '새 구역 만들기']].concat(zones.map(z => [z.id, z.name + (z.code ? ' · ' + z.code : '')])).map(([v, l]) => `<button type="button" class="pick" data-act="pick" data-k="zone" data-v="${v}" aria-pressed="${(d.zone || '') === v}"><span class="ic">${ic(v ? 'pin' : 'plus')}</span><div class="main"><span>${esc(l)}</span></div></button>`).join('')}</div></div>
-        ${d.zone ? '' : `<div class="row2"><div class="field"><label for="lb-zn">구역 이름</label><input id="lb-zn" maxlength="100" data-bind="zname" data-live value="${esc(d.zname || '')}" placeholder="예: 창고" autocomplete="off"></div><div class="field"><label for="lb-zc">구역 코드</label><input id="lb-zc" maxlength="20" data-bind="zcode" data-live value="${esc(d.zcode || '')}" placeholder="예: WH" autocapitalize="characters" autocomplete="off"></div></div>`}
+      h = sheetHead('위치 한 번에 만들기', '구역 › 캐비넷·선반 › 칸 을 한꺼번에 만들고, 바로 QR 라벨을 인쇄합니다')
+        + `<div class="field"><span class="lab">① 어디에</span><div class="pickgrid" style="max-height:none">${[['', '새 구역 만들기']].concat(zones.map(z => [z.id, z.name])).map(([v, l]) => `<button type="button" class="pick" data-act="pick" data-k="zone" data-v="${v}" aria-pressed="${(d.zone || '') === v}"><span class="ic">${ic(v ? 'pin' : 'plus')}</span><div class="main"><span>${esc(l)}</span></div></button>`).join('')}</div></div>
+        ${d.zone ? '' : `<div class="field"><label for="lb-zn">구역 이름</label><input id="lb-zn" maxlength="100" data-bind="zname" data-live value="${esc(d.zname || '')}" placeholder="예: 창고, 2층 자재실" autocomplete="off"></div>`}
         <div class="field"><span class="lab">② 캐비넷·선반</span><div class="seg block" role="group">${['선반', '캐비넷'].map(t => `<button type="button" data-act="lbType" data-v="${t}" aria-pressed="${(d.utype || '선반') === t}">${t}</button>`).join('')}</div></div>
-        <div class="lbrange"><div class="field"><label for="lb-a">번호 처음</label><input id="lb-a" data-bind="from" data-live inputmode="numeric" value="${esc(d.from ?? '1')}" autocomplete="off"></div><span class="tilde">~</span><div class="field"><label for="lb-b">번호 끝</label><input id="lb-b" data-bind="to" data-live inputmode="numeric" value="${esc(d.to ?? '4')}" autocomplete="off"></div><div class="field"><label for="lb-uc">코드 앞부분</label><input id="lb-uc" maxlength="20" data-bind="ucode" data-live value="${esc(d.ucode || '')}" placeholder="${esc(locBulkPlan(d).auto)}" autocapitalize="characters" autocomplete="off"></div></div>
+        <div class="lbrange"><div class="field"><label for="lb-a">번호 처음</label><input id="lb-a" data-bind="from" data-live inputmode="numeric" value="${esc(d.from ?? '1')}" autocomplete="off"></div><span class="tilde">~</span><div class="field"><label for="lb-b">번호 끝</label><input id="lb-b" data-bind="to" data-live inputmode="numeric" value="${esc(d.to ?? '4')}" autocomplete="off"></div></div>
         <div class="field"><span class="lab">③ 칸 (선택)</span><div class="filters" style="margin:0;padding:0;flex-wrap:wrap">${[['', '칸 없음'], ['상,하', '상·하'], ['상,중,하', '상·중·하'], ['1,2,3,4', '1·2·3·4']].map(([v, l]) => `<button type="button" class="fchip" data-act="lbSlots" data-v="${v}" aria-pressed="${(d.slots || '') === v}">${l}</button>`).join('')}</div><input id="lb-sl" maxlength="60" data-bind="slots" data-live value="${esc(d.slots || '')}" placeholder="직접 적기: 예) 상,중,하" autocomplete="off"></div>
         <div id="lb-prev">${locBulkPreview(d)}</div>${sheetErr()}${okBtn('만들기')}`;
       break;
@@ -2679,7 +2695,7 @@ function sheetView() {
       const rows = orderRows().filter(r => r.on && r.qty > 0); const locs = flatTree(S.ix.locKids);
       h = sheetHead('한 번에 입고', `체크한 ${rows.length}가지 · 품목마다 넣을 위치와 수량을 확인하세요`)
         + `<div class="ledger cartlist recvlist">${rows.map(r => { const it = S.ix.item.get(r.id); const q = d['rq_' + r.id] ?? String(r.qty); const loc = d['rl_' + r.id] || '';
-          return `<div class="crow ${isInt(q, 1) && loc ? '' : 'bad'}"><div class="main"><span class="t">${esc(itemTitle(it))}</span><select id="rl-${r.id}" data-bind="rl_${r.id}" aria-label="넣을 위치"><option value="">넣을 위치 고르기</option>${locs.map(({ n, depth }) => `<option value="${n.id}" ${loc === n.id ? 'selected' : ''}>${'\u00a0\u00a0'.repeat(depth)}${esc(n.name)}${n.code ? ' · ' + esc(n.code) : ''}${qtyAt(r.id, n.id) ? ' (지금 ' + qtyAt(r.id, n.id) + ')' : ''}</option>`).join('')}</select></div>
+          return `<div class="crow ${isInt(q, 1) && loc ? '' : 'bad'}"><div class="main"><span class="t">${esc(itemTitle(it))}</span><select id="rl-${r.id}" data-bind="rl_${r.id}" aria-label="넣을 위치"><option value="">넣을 위치 고르기</option>${locs.map(({ n, depth }) => `<option value="${n.id}" ${loc === n.id ? 'selected' : ''}>${'\u00a0\u00a0'.repeat(depth)}${esc(depth ? n.name : '[' + n.name + ']')}${qtyAt(r.id, n.id) ? ' (지금 ' + qtyAt(r.id, n.id) + ')' : ''}</option>`).join('')}</select></div>
             <div class="ministep"><button type="button" data-act="recvStep" data-id="${r.id}" data-d="-1" aria-label="하나 빼기">−</button><input id="rq-${r.id}" data-bind="rq_${r.id}" inputmode="numeric" value="${esc(q)}" aria-label="수량" autocomplete="off"><button type="button" data-act="recvStep" data-id="${r.id}" data-d="1" aria-label="하나 더하기">+</button></div><span class="unit">${esc(it.unit)}</span></div>`; }).join('') || empty('box', '체크한 품목이 없습니다.')}</div>
           <div class="field"><label for="sh-note">메모 (선택)</label><input id="sh-note" maxlength="200" data-bind="note" value="${esc(d.note || '')}" placeholder="예: 10월 발주분, 거래처 이름"></div>
           ${sheetErr()}${okBtn('입고 ' + rows.length + '가지', 'in')}
@@ -2797,12 +2813,12 @@ ACT.sheetOk = () => {
       if (P.err) return bad(P.err);
       return run(() => A.locationsBulk(P.zone ? P.zone.id : null, P.rows, d.op_id), n => n ? n + '곳을 만들었습니다 · 바로 QR 라벨을 인쇄할 수 있습니다' : '새로 만들 위치가 없습니다 (모두 이미 있음)', { op: d.op_id, label: '위치 한 번에 만들기' }).then(n => {
         if (n === false) return;
-        const codes = new Set(); (function walk(rs) { rs.forEach(r => { if (r.code) codes.add(r.code); walk(r.kids || []); }); })(P.rows);
-        S.labelSel = new Set(S.cache.locations.filter(l => codes.has((l.code || '').toUpperCase()) && l.kind !== 'zone').map(l => l.id));
+        const paths = new Set(); (function walk(rs, pre) { rs.forEach(r => { const p = pre ? pre + ' › ' + r.name : r.name; paths.add(p); walk(r.kids || [], p); }); })(P.rows, P.zone ? locPathText(P.zone.id) : '');
+        S.labelSel = new Set(S.cache.locations.filter(l => l.kind !== 'zone' && paths.has(locPathText(l.id))).map(l => l.id));
         nav({ tab: 'more', view: 'labels' });
       });
     },
-    loc: () => { if (!(d.name || '').trim()) return bad('위치 이름을 입력하세요.'); d.code = String(d.code || '').trim().toUpperCase(); if (/\s/.test(d.code)) return bad('라벨 코드에는 빈칸을 넣지 마세요. (예: WH-S5)'); return run(() => A.saveLocation(d), d.id ? '저장했습니다' : '위치를 추가했습니다', d.id ? {} : { op: d.op_id, label: `위치 추가 · ${d.name.trim()}` }); },
+    loc: () => { if (!(d.name || '').trim()) return bad('위치 이름을 입력하세요.'); d.code = String(d.code || '').trim().toUpperCase(); if (/\s/.test(d.code)) return bad('라벨 번호에는 빈칸을 넣지 마세요.'); return run(() => A.saveLocation(d), d.id ? '저장했습니다' : '위치를 추가했습니다', d.id ? {} : { op: d.op_id, label: `위치 추가 · ${d.name.trim()}` }); },
     cat: () => { if (!(d.name || '').trim()) return bad('분류 이름을 입력하세요.'); return run(() => A.saveCategory(d), '저장했습니다', d.id ? {} : { op: d.op_id, label: `분류 추가 · ${d.name.trim()}` }); },
     mkdir: () => { const n = (d.name || '').trim(); if (!n) return bad('폴더 이름을 입력하세요.'); if (/[\/\\]/.test(n)) return bad('폴더 이름에 / 나 \\ 는 쓸 수 없습니다.'); return run(() => A.mkdir(d), '폴더를 만들었습니다'); },
     catSet: () => {
@@ -3009,11 +3025,13 @@ Object.assign(ACT, {
   bulkCheck: () => {
     const text = ($('#bulk-in') || {}).value || ''; S.bulk = { text, rows: [] };
     const byCat = new Map(S.cache.categories.map(c => [c.name.trim(), c.id])); const byCode = new Map(S.cache.locations.filter(l => l.code).map(l => [l.code.toUpperCase(), l.id]));
+    const lkey = v => String(v || '').toLowerCase().replace(/[\s›>\/\\·,\-]/g, ''); const byPath = new Map(S.cache.locations.map(l => [lkey(locPathText(l.id)), l.id]));
+    const locOf = v => byPath.get(lkey(v)) || byCode.get(v.toUpperCase()) || (findLocs(v).length === 1 ? findLocs(v)[0].id : undefined); // 위치: 「창고 선반 1 상」 같은 이름 (예전 라벨 번호도 됨)
     S.bulk.rows = text.split(/\r?\n/).map(l => l.split('\t')).filter(c => c.join('').trim()).filter((c, i) => !(i === 0 && (c[0] || '').trim() === '품명')).map(c => {
       const [name, spec, maker, models, cat, unit, min, code, qty, memo] = c.map(x => (x || '').trim());
       const r = { name, spec, maker, models, unit: unit || '개', min_qty: isInt(min) ? +min : 0, qty: isInt(qty) ? +qty : 0, memo, catName: cat, locCode: code, rawQty: qty };
-      if (cat) r.category_id = byCat.get(cat); if (code) r.location_id = byCode.get(code.toUpperCase());
-      r.warn = !name ? '품명 없음' : /^\d/.test(r.unit) ? '단위에 숫자 — 「개」처럼 세는 말을 적고 수량은 「수량」 칸에' : cat && !r.category_id ? '모르는 분류' : code && !r.location_id ? '모르는 위치 코드' : qty && !isInt(qty) ? '수량이 정수가 아님' : min && !isInt(min) ? '최소 재고가 정수가 아님' : '';
+      if (cat) r.category_id = byCat.get(cat); if (code) r.location_id = locOf(code);
+      r.warn = !name ? '품명 없음' : /^\d/.test(r.unit) ? '단위에 숫자 — 「개」처럼 세는 말을 적고 수량은 「수량」 칸에' : cat && !r.category_id ? '모르는 분류' : code && !r.location_id ? (findLocs(code).length > 1 ? '위치가 여러 곳과 맞음 — 구역 이름까지 적기' : '모르는 위치') : qty && !isInt(qty) ? '수량이 정수가 아님' : min && !isInt(min) ? '최소 재고가 정수가 아님' : '';
       return r;
     });
     if (!S.bulk.rows.length) toast('붙여 넣은 내용이 없습니다.', true); render();
@@ -3074,7 +3092,7 @@ Object.assign(ACT, {
     S.cmtOp = S.cmtOp && S.cmtOp.body === body && S.cmtOp.id === ds.id ? S.cmtOp : { id: ds.id, body, op: opId() }; // 같은 글을 다시 누르면 같은 요청 번호 → 댓글이 두 번 달리지 않음
     const ok = await run(() => S.api.addComment(ds.type, ds.id, body, S.cmtOp.op), '댓글을 남겼습니다', { reload: false, op: S.cmtOp.op, label: '댓글' }); if (ok) { S.cmtOp = null; const n = document.getElementById('cmt-' + ds.id); if (n) n.value = ''; } },
   changePw: async () => { const o = $('#pw-old'), n = $('#pw-new'); if (!o || !n) return; const ok = await run(() => S.api.changePassword(o.value, n.value), '비밀번호를 바꿨습니다', { reload: false }); if (ok) ['pw-old', 'pw-new'].forEach(id => { const x = document.getElementById(id); if (x) x.value = ''; }); },
-  codeGo: () => { const v = ($('#code-in') || {}).value || ''; const l = findLoc(v); if (l) ACT.loc({ id: l.id }); else toast('그 코드의 위치가 없습니다. 라벨에 적힌 코드를 확인하세요.', true); }
+  codeGo: () => { const v = ($('#code-in') || {}).value || ''; const l = findLoc(v) || (findLocs(v).length === 1 ? findLocs(v)[0] : null); if (l) { S.locQ = ''; ACT.loc({ id: l.id }); } else if (!v.trim()) toast('찾을 위치 이름을 적으세요. (예: 선반 1 상)', true); else toast(findLocs(v).length ? '아래 목록에서 위치를 고르세요' : '그 이름의 위치가 없습니다. 구역·선반·칸 이름을 띄어서 적어 보세요.', !findLocs(v).length); }
 });
 
 /* ───────── 편의 기능 (업데이트 4) ───────── */
@@ -3188,10 +3206,9 @@ function cartSync() { const s = S.sheet; if (!s || s.type !== 'cart') return; ca
 /* 위치 한 번에 만들기: 고른 값으로 만들 위치 목록을 짠다 */
 function locBulkPlan(d) {
   const zone = d.zone ? S.ix.loc.get(d.zone) : null;
-  const zcode = (zone ? zone.code || '' : String(d.zcode || '')).trim().toUpperCase();
+  // 라벨 번호는 붙이지 않는다 (QR은 번호 없이 위치 자체를 가리킴). 이미 있는 위치는 「같은 자리 같은 이름」으로 알아본다 — 서버와 같은 규칙
+  const zcode = '', auto = '', pre = '';
   const utype = d.utype || '선반';
-  const auto = (zcode ? zcode + '-' : '') + (utype === '캐비넷' ? 'C' : 'S');
-  const pre = String(d.ucode || '').trim().toUpperCase() || auto;
   const slots = [...new Set(String(d.slots || '').split(/[,\s·/]+/).map(x => x.trim()).filter(Boolean))];
   const a = String(d.from ?? '1').trim(), b = String(d.to ?? '4').trim();
   let err = '';
@@ -3200,24 +3217,26 @@ function locBulkPlan(d) {
   else if (+b < +a) err = '번호 끝이 처음보다 작습니다.';
   else if (+b - +a >= 40) err = '한 번에 40개까지만 만들 수 있습니다.';
   const units = [];
-  if (!err) for (let n = +a; n <= +b; n++) units.push({ name: utype + ' ' + n, code: pre + n, kids: slots.map(x => ({ name: x, code: pre + n + '-' + x.toUpperCase() })) });
+  if (!err) for (let n = +a; n <= +b; n++) units.push({ name: utype + ' ' + n, code: pre ? pre + n : '', kids: slots.map(x => ({ name: x, code: pre ? pre + n + '-' + x.toUpperCase() : '' })) });
   const rows = zone ? units : [{ name: String(d.zname || '').trim(), code: zcode, kids: units }];
   const byCode = new Map(S.cache.locations.filter(l => l.code).map(l => [l.code.toUpperCase(), l]));
-  let make = 0, have = 0, clash = '';
+  let make = 0, have = 0, clash = ''; const exist = new Set(); // 이미 있는 위치 (번호가 있으면 번호로, 없으면 같은 자리 같은 이름으로 — 서버와 같은 규칙)
   (function walk(rs, parentId, parentNew) {
-    rs.forEach(r => { const ex = r.code ? byCode.get(r.code) : null;
-      if (ex && (parentNew || (ex.parent_id || null) !== (parentId || null))) clash = clash || r.code;
-      if (ex) have++; else make++;
+    rs.forEach(r => { let ex = null;
+      if (r.code) ex = byCode.get(r.code) || null;
+      else if (!parentNew) ex = S.cache.locations.find(l => (l.parent_id || null) === (parentId || null) && l.name.trim() === r.name) || null;
+      if (ex && r.code && (parentNew || (ex.parent_id || null) !== (parentId || null))) clash = clash || r.code;
+      if (ex) { have++; exist.add(r); } else make++;
       walk(r.kids || [], ex ? ex.id : null, !ex); });
   })(rows, zone ? zone.id : null, false);
-  if (!err && clash) err = '이미 다른 곳에서 쓰는 라벨 코드가 있습니다: ' + clash + ' — 「코드 앞부분」을 바꾸세요.';
-  return { zone, zcode, auto, pre, slots, units, rows, make, have, err };
+  if (!err && clash) err = '이 구역의 라벨 번호가 다른 곳과 겹칩니다: ' + clash + ' — 위치 관리에서 그 위치의 라벨 번호를 확인하세요.';
+  return { zone, zcode, auto, pre, slots, units, rows, make, have, err, exist };
 }
 function locBulkPreview(d) {
   const P = locBulkPlan(d);
   if (P.err) return `<div class="notice warn">${ic('warn')}<span>${esc(P.err)}</span></div>`;
-  const lines = []; const byCode = new Set(S.cache.locations.map(l => (l.code || '').toUpperCase()).filter(Boolean));
-  (function walk(rs, depth) { rs.forEach(r => { if (lines.length < 40) lines.push(`<div class="lbline" style="padding-left:${depth * 18}px"><span>${esc(r.name)}</span>${r.code ? `<span class="tape">${esc(r.code)}</span>` : ''}${byCode.has(r.code) ? '<span class="chip">이미 있음</span>' : ''}</div>`); walk(r.kids || [], depth + 1); }); })(P.rows, 0);
+  const lines = []; const K = [P.zone ? 'unit' : 'zone', P.zone ? 'slot' : 'unit', 'slot'];
+  (function walk(rs, depth) { rs.forEach(r => { if (lines.length < 40) lines.push(`<div class="lbline k-${K[depth]}" style="padding-left:${depth * 18}px">${ic(LOC_KIND[K[depth]][0])}<span>${esc(r.name)}</span>${P.exist.has(r) ? '<span class="chip">이미 있음</span>' : ''}</div>`); walk(r.kids || [], depth + 1); }); })(P.rows, 0);
   return `<div class="lbprev"><div class="lbsum">새로 만들 위치 <b>${P.make}곳</b>${P.have ? ` · 이미 있는 ${P.have}곳은 그대로 둡니다` : ''}</div>${lines.join('')}${P.make + P.have > 40 ? '<div class="lbline muted">…</div>' : ''}</div>`;
 }
 
@@ -3553,7 +3572,7 @@ function openDeep() {
   if (S.deepGo) { const go = S.deepGo; S.deepGo = null; S.sheet = null; ACT.notif({ link: JSON.stringify(go) }); return; }
   if (!S.deepCode) return;
   const code = S.deepCode; S.deepCode = null; const l = findLoc(code);
-  if (l) ACT.loc({ id: l.id }); else toast('라벨 코드 「' + code + '」 위치가 앱에 없습니다.', true);
+  if (l) ACT.loc({ id: l.id }); else toast('이 QR 라벨의 위치가 앱에 없습니다. 지워졌는지 위치 관리에서 확인하세요.', true);
 }
 /* 연결이 끊겨 앱 목록에 못 올린 파일이 이 폰에 적혀 있으면 마저 올린다 */
 function flushUps() {
@@ -3598,7 +3617,7 @@ let scanStream = null, scanLoop = null, scanStarting = false;
 const scanLive = () => !!scanStream && scanStream.getVideoTracks().some(t => t.readyState === 'live');
 async function startScan() {
   const msg = (t, err = false) => { S.scanMsg = t; S.scanErr = err; const m = $('#scanmsg'); if (m) m.textContent = t; if (err && !$('[data-act="scanRetry"]')) render(); };
-  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) return msg('이 브라우저는 카메라를 쓸 수 없습니다. 코드를 직접 입력하세요.');
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) return msg('이 브라우저는 카메라를 쓸 수 없습니다. 아래에서 위치 이름으로 찾으세요.');
   if (scanLive()) return;            // 이미 켜져 있음
   if (scanStream) stopScan();        // 폰이 카메라를 끊었으면(다른 앱 다녀옴 등) 다시 켠다
   if (scanStarting) return;          // 켜는 중에 또 부르면 두 번 켜지 않는다

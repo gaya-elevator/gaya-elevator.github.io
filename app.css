@@ -225,6 +225,20 @@ button.lrow:active{background:var(--sunk)}
 .tape::before{content:"";width:6px;height:6px;border:1.6px solid currentColor;border-radius:1.5px;flex:none;opacity:.75}
 .tape.lg{font-size:14px;padding:5px 11px 5px 9px;border-radius:8px}
 .tapes{display:flex;flex-wrap:wrap;gap:4px;margin-top:4px}
+/* 위치 이름: [구역] 선반 1 › 상  — 라벨 번호 대신 어디서나 이 모양 */
+.lname{overflow-wrap:anywhere}
+.lz{display:inline-block;font-size:.86em;font-weight:700;background:var(--sunk);color:var(--muted);border:1px solid var(--line-soft);border-radius:6px;padding:0 6px;margin-right:6px;line-height:1.5;vertical-align:1px}
+.lname .lz:last-child{margin-right:0}
+.lchip{display:inline-flex;align-items:center;gap:6px;font-size:12.5px;font-weight:600;color:var(--ink);background:var(--surface);border:1px solid var(--line);border-radius:8px;padding:2px 4px 2px 3px}
+.lchip .lz{margin-right:3px;font-size:11.5px}
+.lchip b{background:var(--accent-soft);color:var(--accent);border-radius:5px;padding:0 6px;font-variant-numeric:tabular-nums}
+.kindtag{align-self:flex-start;display:inline-flex;align-items:center;gap:5px;font-size:12.5px;font-weight:700;color:var(--accent);background:var(--accent-soft);border-radius:7px;padding:3px 9px 3px 7px}
+.kindtag svg{width:15px;height:15px}
+details.adv{border:1px dashed var(--line);border-radius:var(--r-sm);padding:2px 12px}
+details.adv>summary{cursor:pointer;font-size:13.5px;color:var(--muted);font-weight:600;padding:9px 0}
+details.adv[open]{padding-bottom:12px}
+.lbline svg{width:16px;height:16px;color:var(--accent);flex:none}
+.lbline.k-slot svg{color:var(--muted)}
 
 /* 상세 머리 */
 .hero{background:var(--surface);border:1px solid var(--line-soft);border-radius:14px;padding:18px;display:flex;flex-direction:column;gap:14px;box-shadow:var(--shadow-sm)}
@@ -354,8 +368,8 @@ button.lrow:active{background:var(--sunk)}
 .qrlabel .lh{display:flex;align-items:center;gap:5px;font-size:10px;font-weight:700;letter-spacing:.04em;color:#13265C}
 .qrlabel .lh .logo{width:12px;height:15px}
 .qrlabel canvas,.qrlabel svg:not(.logo){width:110px;height:110px}
-.qrlabel .code{font-family:var(--font-mono);font-weight:700;font-size:14px;letter-spacing:.06em;background:#111;color:#fff;padding:2px 9px;border-radius:3px}
-.qrlabel .nm{font-size:11.5px;text-align:center}
+.qrlabel .code{font-weight:800;font-size:15px;line-height:1.25;color:#111;text-align:center;overflow-wrap:anywhere}
+.qrlabel .nm{font-size:11.5px;text-align:center;color:#444}
 
 /* ───────── 관리 ───────── */
 .statusboard{display:grid;grid-template-columns:1fr 1fr;gap:10px}
@@ -587,6 +601,7 @@ label.crow{cursor:pointer}
 .ps-foot{border-top:calc(0.3*var(--u)) solid #D2DAE6;padding-top:calc(2*var(--u));font-size:calc(2.3*var(--u));color:#5A6783;text-align:center}
 .ps-btn{display:inline-block;align-self:flex-start;max-width:100%;background:#2453C6;color:#fff;border-radius:calc(1.4*var(--u));padding:calc(1.1*var(--u)) calc(2.2*var(--u));font-size:calc(2.3*var(--u));font-weight:700;text-decoration:none;line-height:1.4}
 .qrlabel .qropen{margin-top:6px;min-height:34px}
+.qrlabel .qropen svg:not(.logo){width:17px;height:17px}
 /* 자재 첫 화면 바로가기 */
 .quicklinks{display:grid;grid-auto-flow:column;grid-auto-columns:minmax(0,1fr);gap:8px}
 .quicklinks button{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:5px;min-height:64px;padding:8px 6px;border:1px solid var(--navy);border-radius:var(--r);background:var(--navy);color:var(--navy-ink);font-size:13px;font-weight:700;line-height:1.25;text-align:center;box-shadow:var(--shadow-sm)}
