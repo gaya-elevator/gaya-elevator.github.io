@@ -101,7 +101,7 @@ main{flex:1;padding:16px 16px calc(var(--tabh) + 30px + env(safe-area-inset-bott
 .search input{border:0;background:transparent;outline:0;flex:1;min-width:0;height:100%;font-size:16px}
 .seg{display:inline-grid;grid-auto-flow:column;grid-auto-columns:1fr;border-radius:11px;background:var(--sunk);padding:3px;gap:2px}
 .seg button{border:0;background:none;padding:8px 16px;font-size:14px;color:var(--muted);border-radius:9px;font-weight:600;min-height:38px}
-.seg button[aria-pressed="true"]{background:var(--surface);color:var(--ink);box-shadow:var(--shadow-sm)}
+.seg button[aria-pressed="true"]{background:var(--accent);color:var(--accent-ink);box-shadow:0 1px 3px rgba(14,26,51,.22)}
 .seg.block{display:grid;width:100%}
 .seg button svg{width:17px;height:17px;vertical-align:-3px;margin-right:5px}
 .themepick{padding:0 16px 14px}
@@ -144,23 +144,43 @@ main{flex:1;padding:16px 16px calc(var(--tabh) + 30px + env(safe-area-inset-bott
 .sec-h .aside{font-size:12.5px;color:var(--muted)}
 .sec-acts{display:flex;gap:6px;margin-left:auto}
 
-/* 칸마다 다른 색 — 자재 첫 화면 위 6칸, 큰 칸(자주 쓰는 품목·재고 부족·보관 위치·최근 입출고 …)마다 바탕·머리 아이콘 색, 더보기 메뉴 아이콘 */
-.tone-red{--tone:#C42F2A}.tone-orange{--tone:#C2560F}.tone-amber{--tone:#A86B00}.tone-green{--tone:#1B8753}.tone-teal{--tone:#0F7787}.tone-blue{--tone:#2453C6}.tone-violet{--tone:#6B3FCF}.tone-pink{--tone:#B42F6C}.tone-slate{--tone:#4D5B7A}
-@media (prefers-color-scheme:dark){:root:not([data-theme="light"]) .tone-red{--tone:#FF8B82}:root:not([data-theme="light"]) .tone-orange{--tone:#FFA066}:root:not([data-theme="light"]) .tone-amber{--tone:#F2BF5E}:root:not([data-theme="light"]) .tone-green{--tone:#5DD79B}:root:not([data-theme="light"]) .tone-teal{--tone:#62CFDD}:root:not([data-theme="light"]) .tone-blue{--tone:#86ABFF}:root:not([data-theme="light"]) .tone-violet{--tone:#B9A0FF}:root:not([data-theme="light"]) .tone-pink{--tone:#F58BBE}:root:not([data-theme="light"]) .tone-slate{--tone:#A9B6D0}}
-:root[data-theme="dark"] .tone-red{--tone:#FF8B82}:root[data-theme="dark"] .tone-orange{--tone:#FFA066}:root[data-theme="dark"] .tone-amber{--tone:#F2BF5E}:root[data-theme="dark"] .tone-green{--tone:#5DD79B}:root[data-theme="dark"] .tone-teal{--tone:#62CFDD}:root[data-theme="dark"] .tone-blue{--tone:#86ABFF}:root[data-theme="dark"] .tone-violet{--tone:#B9A0FF}:root[data-theme="dark"] .tone-pink{--tone:#F58BBE}:root[data-theme="dark"] .tone-slate{--tone:#A9B6D0}
-.sec[class*="tone-"]{background:color-mix(in srgb,var(--tone) 6%,var(--bg));border:1px solid color-mix(in srgb,var(--tone) 17%,var(--bg));border-radius:16px;padding:11px 10px 10px}
-.sec[class*="tone-"]>.sec-h{padding:0 2px}
-.sec[class*="tone-"]>.sec-h .btn.sm{padding:0 10px}
-:root[data-theme="dark"] .sec[class*="tone-"]{background:color-mix(in srgb,var(--tone) 9%,var(--bg));border-color:color-mix(in srgb,var(--tone) 24%,var(--bg))}
-@media (prefers-color-scheme:dark){:root:not([data-theme="light"]) .sec[class*="tone-"]{background:color-mix(in srgb,var(--tone) 9%,var(--bg));border-color:color-mix(in srgb,var(--tone) 24%,var(--bg))}}
-.sec[class*="tone-"]>.sec-h h2::before{display:none}
+/* 칸 구분 — 색은 네 가지만 쓰고(파랑 = 기본 · 노랑 = 즐겨찾기·메모·폴더·안내 · 빨강 = 부족·지우기 · 회청 = 기록), 나머지는 모양으로 나눈다:
+   큰 칸 = 제목 띠가 있는 상자(제목 앞 색 아이콘), 위 숫자 칸 = 흰 카드 + 작은 색 아이콘, 바로가기 = 남색 단추 */
+.tone-blue{--tone:#2453C6}.tone-amber{--tone:#A86B00}.tone-red{--tone:#C42F2A}.tone-slate{--tone:#55637F}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]) .tone-blue{--tone:#86ABFF}:root:not([data-theme="light"]) .tone-amber{--tone:#F2BF5E}:root:not([data-theme="light"]) .tone-red{--tone:#FF8B82}:root:not([data-theme="light"]) .tone-slate{--tone:#A9B6D0}}
+:root[data-theme="dark"] .tone-blue{--tone:#86ABFF}:root[data-theme="dark"] .tone-amber{--tone:#F2BF5E}:root[data-theme="dark"] .tone-red{--tone:#FF8B82}:root[data-theme="dark"] .tone-slate{--tone:#A9B6D0}
+.sec.box{background:var(--surface);border:1px solid var(--line);border-radius:16px;box-shadow:var(--shadow-sm);gap:0;overflow:hidden}
+.sec.box>.sec-h{padding:9px 12px;min-height:50px;background:color-mix(in srgb,var(--sunk) 60%,var(--surface));border-bottom:1px solid var(--line-soft)}
+.sec.box>.sec-h h2{font-size:15px}
+.sec.box>.sec-h h2::before{display:none}
+.sec.box>.sec-h .btn.sm{padding:0 10px}
+.sec.box>.sec-h .btn.sm:not(.add):not(.edit):not(.primary){background:var(--surface)}
+.sec.box>.ledger{border:0;border-radius:0;box-shadow:none}
+.sec.box>.quick{padding:10px}
+.sec.box .qitem{background:var(--bg);border-color:transparent;box-shadow:none}
+.sec.box.tone-amber .folder-ic{color:var(--tone)}
+.sec.box.tone-amber .folder-ic svg{fill:color-mix(in srgb,var(--tone) 16%,var(--surface))}
+.sec.box>.pad{padding:12px}
 .sec-h h2 .hic{flex:none;width:26px;height:26px;border-radius:8px;display:grid;place-items:center;background:var(--tone,var(--accent));color:var(--surface)}
 .sec-h h2 .hic svg{width:15px;height:15px;stroke-width:2.1}
-.stile[class*="tone-"],.quicklinks button[class*="tone-"]{background:color-mix(in srgb,var(--tone) 10%,var(--surface));border-color:color-mix(in srgb,var(--tone) 26%,var(--surface))}
-.stile[class*="tone-"] .k{color:var(--tone)}
-.quicklinks button[class*="tone-"] svg{color:var(--tone)}
+.stile .k .sic{flex:none;width:22px;height:22px;border-radius:7px;display:grid;place-items:center;background:var(--tone,var(--accent));color:var(--surface)}
+.stile .k .sic svg{width:13px;height:13px;stroke-width:2.3}
 .lrow[class*="tone-"] .ic{background:color-mix(in srgb,var(--tone) 15%,var(--surface));color:var(--tone)}
-.sec[class*="tone-"] .lrow .ic{background:color-mix(in srgb,var(--tone) 14%,var(--surface));color:var(--tone)}
+/* 위치 단계 구분: 구역(핀 · 굵게 · 회색 띠) › 캐비넷·선반(선반 아이콘) › 칸(작게 · 서랍 아이콘) */
+.lrow.k-slot .ic{background:transparent;color:var(--muted)}
+.pick.lp{gap:10px}
+.pick.lp .lic{flex:none;width:30px;height:30px;border-radius:8px;display:grid;place-items:center;background:var(--accent-soft);color:var(--accent)}
+.pick.lp .lic svg{width:17px;height:17px}
+.pick.lp .nm{font-weight:600;overflow-wrap:anywhere}
+.pick.lp .kd{font-size:11.5px;color:var(--muted)}
+.pick.lp .tape{flex:none;margin-left:auto}
+.pick.lp.k-zone{background:var(--sunk)}
+.pick.lp.k-zone .nm{font-weight:800}
+.pick.lp.k-zone .lic{background:var(--accent);color:var(--accent-ink)}
+.pick.lp.k-slot{min-height:46px;padding-top:6px;padding-bottom:6px}
+.pick.lp.k-slot .lic{width:24px;height:24px;background:none;color:var(--muted)}
+.pick.lp.k-slot .nm{font-weight:500;font-size:14.5px}
+.pick.lp[aria-pressed="true"]{background:var(--accent-soft)}
 
 /* 요약 타일 (자재 첫 화면) */
 .stats{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}
@@ -569,9 +589,11 @@ label.crow{cursor:pointer}
 .qrlabel .qropen{margin-top:6px;min-height:34px}
 /* 자재 첫 화면 바로가기 */
 .quicklinks{display:grid;grid-auto-flow:column;grid-auto-columns:minmax(0,1fr);gap:8px}
-.quicklinks button{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:5px;min-height:64px;padding:8px 6px;border:1px solid var(--line-soft);border-radius:var(--r);background:var(--surface);color:var(--ink);font-size:13px;font-weight:700;line-height:1.25;text-align:center;box-shadow:var(--shadow-sm)}
-.quicklinks button svg{width:22px;height:22px;color:var(--accent)}
-.quicklinks button:hover{border-color:var(--line)}
+.quicklinks button{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:5px;min-height:64px;padding:8px 6px;border:1px solid var(--navy);border-radius:var(--r);background:var(--navy);color:var(--navy-ink);font-size:13px;font-weight:700;line-height:1.25;text-align:center;box-shadow:var(--shadow-sm)}
+.quicklinks button svg{width:22px;height:22px;color:var(--navy-muted)}
+.quicklinks button:hover{background:var(--navy-2)}
+:root[data-theme="dark"] .quicklinks button{background:var(--navy-2);border-color:color-mix(in srgb,var(--navy-muted) 22%,var(--navy-2))}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]) .quicklinks button{background:var(--navy-2);border-color:color-mix(in srgb,var(--navy-muted) 22%,var(--navy-2))}}
 /* 자료: 모든 자료 / 내 저장함 */
 .docseg button{display:flex;align-items:center;justify-content:center;gap:5px}
 .docseg button svg{margin:0}

@@ -10,7 +10,7 @@ const CONFIG = Object.assign({
   STORAGE_WARN: 0.8
 }, window.GAYA_CONFIG || {});
 const DEMO = !CONFIG.SUPABASE_URL;
-const APP_VER = '62ef73fd';
+const APP_VER = '2946f48d';
 
 /* ───────── 작은 도구들 ───────── */
 const $ = (s, r = document) => r.querySelector(s);
@@ -219,6 +219,7 @@ const P = {
   book: '<path d="M5 4.5h10a3 3 0 0 1 3 3V20H8a3 3 0 0 1-3-3z"/><path d="M5 17a3 3 0 0 1 3-3h10"/>',
   key: '<circle cx="8" cy="12" r="3.5"/><path d="M11.5 12H21M17 12v3M20 12v2"/>',
   paste: '<path d="M8 4h8v3H8z"/><path d="M16 5.5h2.5V21h-13V5.5H8"/>',
+  slot: '<rect x="3.5" y="8" width="17" height="9" rx="1.8"/><path d="M9.5 12.5h5"/>',
   shelf: '<path d="M4 3v18M20 3v18M4 8h16M4 14h16M4 20h16"/>',
   logout: '<path d="M14 4h5v16h-5M10 8l-4 4 4 4M6 12h10"/>',
   restore: '<path d="M4 12a8 8 0 1 0 2.4-5.7L4 8.5"/><path d="M4 4v4.5h4.5"/>',
@@ -1868,11 +1869,13 @@ function itemList(items, qtyOf, sub, outLoc) {
   }
   return `<div class="ledger">${h}</div>`;
 }
+const LOC_KIND = { zone: ['pin', '구역'], unit: ['shelf', '캐비넷·선반'], slot: ['slot', '칸'] }; // 위치 단계: 아이콘 · 이름
+const locKind = l => LOC_KIND[l && l.kind] || LOC_KIND.zone;
 const locRow = (l, extra = '') => {
   const ids = descLocs(l.id); const items = new Set();
   ids.forEach(id => (S.ix.byLoc.get(id) || []).forEach(s => items.add(s.item_id)));
-  return `<button class="lrow" data-act="loc" data-id="${l.id}"><span class="ic">${ic(l.kind === 'zone' ? 'pin' : 'shelf')}</span>
-    <div class="main"><span class="t">${esc(l.name)}</span><span class="s">${items.size}품목${extra}</span></div>
+  return `<button class="lrow k-${esc(l.kind || 'zone')}" data-act="loc" data-id="${l.id}"><span class="ic">${ic(locKind(l)[0])}</span>
+    <div class="main"><span class="t">${esc(l.name)}</span><span class="s">${locKind(l)[1]} · ${items.size}품목${extra}</span></div>
     ${l.code ? `<span class="tape">${esc(l.code)}</span>` : ''}<span class="chev">${ic('chev')}</span></button>`;
 };
 const tapesOf = it => `<span class="tapes">${(S.ix.byItem.get(it.id) || []).map(s => `<span class="tape">${esc(locCode(s.location_id))} · ${s.qty}</span>`).join('') || '<span class="s">재고 없음</span>'}</span>`;
@@ -1896,7 +1899,7 @@ const VIEW = {};
 VIEW['items.browse'] = r => {
   const node = r.node; const mode = node ? (r.mode || S.itemsMode) : S.itemsMode; const q = S.q.trim();
   let title = '자재', cr = null, pane = '', actions = '';
-  const tools = `<div class="toolbar"><div class="seg" role="group" aria-label="보기 방식"><button data-act="mode" data-m="loc" aria-pressed="${mode === 'loc'}">위치별</button><button data-act="mode" data-m="cat" aria-pressed="${mode === 'cat'}">분류별</button></div><span class="grow"></span>${mode === 'cat' && can(S.user, 'item') ? `<button class="btn sm edit" data-act="catManage" data-write aria-label="분류 편집">${ic('gear')}분류</button>` : ''}${can(S.user, 'item') ? `<button class="btn sm add" data-act="itemNew" data-write>${ic('plus')}품목 추가</button>` : ''}</div>`;
+  const tools = `<div class="toolbar"><div class="seg" role="group" aria-label="보기 방식"><button data-act="mode" data-m="loc" aria-pressed="${mode === 'loc'}">${ic('pin')}위치별</button><button data-act="mode" data-m="cat" aria-pressed="${mode === 'cat'}">${ic('tag')}분류별</button></div><span class="sec-acts">${mode === 'cat' && can(S.user, 'item') ? `<button class="btn sm edit" data-act="catManage" data-write aria-label="분류 편집">${ic('gear')}분류</button>` : ''}${can(S.user, 'item') ? `<button class="btn sm add" data-act="itemNew" data-write>${ic('plus')}품목 추가</button>` : ''}</span></div>`;
   if (q) {
     const items = (S.searchRes || []).map(id => S.ix.item.get(id)).filter(Boolean);
     pane = `<section class="sec"><div class="sec-h"><h2>검색 결과</h2><span class="aside">${S.searchRes ? items.length + '건' : ''}</span></div>
@@ -1906,15 +1909,15 @@ VIEW['items.browse'] = r => {
       const lows = S.cache.items.filter(isLow); const d = vd(); const tx = d.tx || [];
       const mine = myItems(d.mine);
       pane = `${installPromo()}<div class="stats">
-          <button class="stile tone-red ${lows.length ? 'crit' : ''}" data-act="jump" data-to="sec-low"><span class="k">${ic('warn')}재고 부족</span><span class="v">${lows.length}<small>품목</small></span></button>
-          <button class="stile tone-blue" data-act="history"><span class="k">${ic('move')}오늘 입출고</span><span class="v">${d.today ?? '–'}<small>건</small></span></button>
-          <div class="stile tone-teal"><span class="k">${ic('box')}등록 품목</span><span class="v">${S.cache.items.length}<small>종</small></span></div></div>
-        <div class="quicklinks"><button class="tone-violet" data-act="history">${ic('history')}<span>입출고 기록</span></button><button class="tone-orange" data-act="sites">${ic('pin')}<span>현장별 이력</span></button>${can(S.user, 'item') ? `<button class="tone-green" data-act="order">${ic('list')}<span>발주·입고</span></button>` : ''}</div>
-        ${mine.length ? `<section class="sec tone-amber"><div class="sec-h">${hh('내가 자주 쓰는 품목', 'star')}</div><div class="quick">${mine.map(it => `<button class="qitem" data-act="item" data-id="${it.id}"><span class="t">${esc(itemTitle(it))}</span><span class="qty ${isLow(it) ? 'low' : ''}">${total(it.id)}<small>${esc(it.unit)}</small></span></button>`).join('')}</div></section>` : ''}
+          <button class="stile ${lows.length ? 'crit tone-red' : 'tone-slate'}" data-act="jump" data-to="sec-low"><span class="k"><span class="sic">${ic('warn')}</span>재고 부족</span><span class="v">${lows.length}<small>품목</small></span></button>
+          <button class="stile tone-blue" data-act="history"><span class="k"><span class="sic">${ic('move')}</span>오늘 입출고</span><span class="v">${d.today ?? '–'}<small>건</small></span></button>
+          <div class="stile tone-blue"><span class="k"><span class="sic">${ic('box')}</span>등록 품목</span><span class="v">${S.cache.items.length}<small>종</small></span></div></div>
+        <div class="quicklinks"><button data-act="history">${ic('history')}<span>입출고 기록</span></button><button data-act="sites">${ic('pin')}<span>현장별 이력</span></button>${can(S.user, 'item') ? `<button data-act="order">${ic('list')}<span>발주·입고</span></button>` : ''}</div>
+        ${mine.length ? `<section class="sec box tone-amber"><div class="sec-h">${hh('내가 자주 쓰는 품목', 'star')}</div><div class="quick">${mine.map(it => `<button class="qitem" data-act="item" data-id="${it.id}"><span class="t">${esc(itemTitle(it))}</span><span class="qty ${isLow(it) ? 'low' : ''}">${total(it.id)}<small>${esc(it.unit)}</small></span></button>`).join('')}</div></section>` : ''}
         ${tools}
-        ${lows.length ? `<section class="sec tone-red" id="sec-low"><div class="sec-h">${hh('재고 부족', 'warn')}<span class="sec-acts">${can(S.user, 'item') ? `<button class="btn sm" data-act="order">발주 목록</button>` : ''}<button class="btn sm" data-act="shareLow">${ic('share')}목록 보내기</button></span></div>${itemList(lows, it => total(it.id))}</section>` : ''}
-        <section class="sec tone-teal"><div class="sec-h">${hh('보관 위치', 'pin')}</div><div class="ledger">${(S.ix.locKids.get(null) || []).map(l => locRow(l)).join('') || empty('pin', '등록된 위치가 없습니다.', can(S.user, 'location') ? '더보기 › 위치 관리에서 구역을 추가하세요.' : '')}</div></section>
-        <section class="sec tone-blue" id="sec-recent"><div class="sec-h">${hh('최근 입출고', 'history')}<button class="btn sm" data-act="history">${ic('history')}전체 기록</button></div><div class="ledger hist">${d.tx ? (tx.length ? tx.map(t => txRow(t, true)).join('') : empty('list', '아직 입출고 기록이 없습니다.')) : loadingBox()}</div></section>`;
+        ${lows.length ? `<section class="sec box tone-red" id="sec-low"><div class="sec-h">${hh('재고 부족', 'warn')}<span class="sec-acts">${can(S.user, 'item') ? `<button class="btn sm" data-act="order">발주 목록</button>` : ''}<button class="btn sm" data-act="shareLow">${ic('share')}목록 보내기</button></span></div>${itemList(lows, it => total(it.id))}</section>` : ''}
+        <section class="sec box tone-blue"><div class="sec-h">${hh('보관 위치', 'pin')}</div><div class="ledger">${(S.ix.locKids.get(null) || []).map(l => locRow(l)).join('') || empty('pin', '등록된 위치가 없습니다.', can(S.user, 'location') ? '더보기 › 위치 관리에서 구역을 추가하세요.' : '')}</div></section>
+        <section class="sec box tone-slate" id="sec-recent"><div class="sec-h">${hh('최근 입출고', 'history')}<button class="btn sm" data-act="history">${ic('history')}전체 기록</button></div><div class="ledger hist">${d.tx ? (tx.length ? tx.map(t => txRow(t, true)).join('') : empty('list', '아직 입출고 기록이 없습니다.')) : loadingBox()}</div></section>`;
     } else {
       const l = S.ix.loc.get(node); if (!l) return { title: '위치 없음', body: empty('pin', '지워진 위치입니다.') };
       const path = pathOf(S.ix.loc, node);
@@ -1929,8 +1932,8 @@ VIEW['items.browse'] = r => {
           <div style="flex:1;min-width:0;display:flex;flex-direction:column;gap:6px">${l.code ? `<span class="tape lg" style="align-self:flex-start">${esc(l.code)}</span>` : ''}<span class="muted" style="font-size:13.5px">${esc(locPathText(node))}</span></div>
           <div class="herobtns"><button class="btn sm" data-act="labelsFor" data-id="${l.id}">${ic('qr')}라벨</button>${can(S.user, 'adjust') ? `<button class="btn sm" data-act="countOpen" data-id="${l.id}" data-write>${ic('check')}실사</button>` : ''}</div></section>
         ${can(S.user, 'adjust') && countChanges(node).out.length ? `<button class="notice warn" data-act="countOpen" data-id="${l.id}" style="border:0;text-align:left;width:100%;cursor:pointer">${ic('warn')}<span>실사하던 수량 <b>${countChanges(node).out.length}개</b>가 아직 저장되지 않았습니다. 눌러서 이어서 하세요.</span></button>` : ''}
-        ${kids.length ? `<section class="sec tone-teal"><div class="sec-h">${hh('안쪽 위치', 'pin')}</div><div class="ledger">${kids.map(k => locRow(k)).join('')}</div></section>` : ''}
-        <section class="sec tone-blue"><div class="sec-h">${hh('이 위치의 자재', 'box')}<button class="btn sm add" data-act="inHere" data-id="${l.id}" data-write>${ic('in')}여기에 입고</button></div>
+        ${kids.length ? `<section class="sec box tone-blue"><div class="sec-h">${hh('안쪽 위치', 'pin')}</div><div class="ledger">${kids.map(k => locRow(k)).join('')}</div></section>` : ''}
+        <section class="sec box tone-blue"><div class="sec-h">${hh('이 위치의 자재', 'box')}<button class="btn sm add" data-act="inHere" data-id="${l.id}" data-write>${ic('in')}여기에 입고</button></div>
         ${here.length ? itemList(here.map(x => x.it), it => qmap.get(it.id), null, node) : `<div class="ledger">${empty('box', '이 위치에 등록된 자재가 없습니다.', kids.length ? '안쪽 위치를 열어 보세요.' : '「여기에 입고」로 자재를 넣을 수 있습니다.')}</div>`}</section>`;
     }
   } else {
@@ -1944,8 +1947,8 @@ VIEW['items.browse'] = r => {
       return `<button class="lrow" data-act="cat" data-id="${k.id}"><span class="ic">${ic('tag')}</span><div class="main"><span class="t">${esc(k.name)}</span><span class="s">${its.length}품목</span></div>${low ? `<span class="chip crit">부족 ${low}</span>` : ''}<span class="chev">${ic('chev')}</span></button>`; };
     const catTools = c && can(S.user, 'item') ? `<div class="toolbar fill"><button class="btn sm add" data-act="itemNew" data-write>${ic('plus')}품목 추가</button><button class="btn sm edit" data-act="catSet" data-id="${c.id}" data-write>${ic('gear')}분류 설정</button></div>` : '';
     const noneCnt = c ? S.cache.items.filter(i => !i.category_id || !S.ix.cat.has(i.category_id)).length : 0;
-    pane = (node ? catTools : tools) + (kids.length ? `<section class="sec tone-violet"><div class="sec-h">${hh(c ? '하위 분류' : '분류', 'tag')}</div><div class="ledger">${kids.map(catRow).join('')}</div></section>` : '')
-      + (direct.length ? `<section class="sec ${c ? 'tone-blue' : 'tone-slate'}"><div class="sec-h">${hh(c ? '품목' : '분류 없음', 'box')}<span class="aside">전체 수량</span></div>${itemList(direct, it => total(it.id), tapesOf)}</section>` : '')
+    pane = (node ? catTools : tools) + (kids.length ? `<section class="sec box tone-blue"><div class="sec-h">${hh(c ? '하위 분류' : '분류', 'tag')}</div><div class="ledger">${kids.map(catRow).join('')}</div></section>` : '')
+      + (direct.length ? `<section class="sec box ${c ? 'tone-blue' : 'tone-slate'}"><div class="sec-h">${hh(c ? '품목' : '분류 없음', 'box')}<span class="aside">전체 수량</span></div>${itemList(direct, it => total(it.id), tapesOf)}</section>` : '')
       + (!kids.length && !direct.length ? `<div class="ledger">${empty('tag', '이 분류에는 품목이 없습니다.', c && can(S.user, 'item') && noneCnt ? `분류 없는 품목 ${noneCnt}개를 「분류 설정」에서 한 번에 가져올 수 있습니다.` : '')}</div>` : '');
   }
   const body = searchBox('q-items', S.q, '품명·규격·제조사·기종 검색', '자재 검색') + `<div id="pane" class="pane">${pane}</div>`;
@@ -2014,8 +2017,8 @@ VIEW['items.site'] = r => {
     rows.forEach(t => { const d = toDate(t.created_at); const dl = d.getFullYear() + '년 ' + (d.getMonth() + 1) + '월 ' + d.getDate() + '일'; if (dl !== day) { day = dl; h += `<div class="group-h"><span>${dl}</span></div>`; } h += txRow(t, true); });
     return `${hos.length ? `<div class="filters" role="group" aria-label="동·호기">${[['', '전체'], ...hos.map(x => [x, x])].map(([v, l]) => `<button class="fchip" data-act="siteHo" data-v="${esc(v)}" aria-pressed="${sel === v}">${esc(l)}</button>`).join('')}</div>` : ''}
       <div class="stats"><div class="stile"><span class="k">${ic('out')}출고</span><span class="v">${outs.length}<small>건</small></span></div><div class="stile"><span class="k">${ic('box')}자재 종류</span><span class="v">${sum.size}<small>가지</small></span></div><div class="stile"><span class="k">${ic('clock')}처음 기록</span><span class="v sm">${rows.length ? (d => (d.getFullYear() % 100) + '.' + (d.getMonth() + 1) + '.' + d.getDate())(toDate(rows[rows.length - 1].created_at)) : '–'}</span></div></div>
-      ${top.length ? `<section class="sec tone-orange"><div class="sec-h">${hh('이 현장에 쓴 자재', 'box')}<span class="aside">취소한 것은 빼고</span></div><div class="ledger">${top.map(([id, q]) => { const it = S.ix.item.get(id); return `<button class="lrow" data-act="item" data-id="${id}"><div class="main"><span class="t">${esc(itemTitle(it))}</span><span class="s">${outs.filter(t => t.item_id === id).length}번 출고</span></div><span class="qty">${q}<small>${esc(it ? it.unit : '')}</small></span><span class="chev">${ic('chev')}</span></button>`; }).join('')}</div></section>` : ''}
-      <section class="sec tone-blue"><div class="sec-h">${hh('기록', 'history')}<span class="aside">${rows.length}건</span></div><div class="ledger hist">${h || empty('list', '기록이 없습니다.')}</div></section>`;
+      ${top.length ? `<section class="sec box tone-blue"><div class="sec-h">${hh('이 현장에 쓴 자재', 'box')}<span class="aside">취소한 것은 빼고</span></div><div class="ledger">${top.map(([id, q]) => { const it = S.ix.item.get(id); return `<button class="lrow" data-act="item" data-id="${id}"><div class="main"><span class="t">${esc(itemTitle(it))}</span><span class="s">${outs.filter(t => t.item_id === id).length}번 출고</span></div><span class="qty">${q}<small>${esc(it ? it.unit : '')}</small></span><span class="chev">${ic('chev')}</span></button>`; }).join('')}</div></section>` : ''}
+      <section class="sec box tone-slate"><div class="sec-h">${hh('기록', 'history')}<span class="aside">${rows.length}건</span></div><div class="ledger hist">${h || empty('list', '기록이 없습니다.')}</div></section>`;
   })();
   return { title: r.name, crumbs: crumbs([{ label: '자재', act: 'locRoot' }, { label: '현장별', act: 'sites' }, { label: r.name }]), body };
 };
@@ -2094,11 +2097,11 @@ VIEW['items.item'] = r => {
       <div class="total"><span class="big" style="${isLow(it) ? 'color:var(--crit)' : ''}">${t}<small>${u}</small></span><span class="muted">전체 재고</span>${lowChip(it)}</div>
       <div class="actions3"><button class="btn in" data-act="txIn" data-id="${it.id}" data-write>${ic('in')}입고</button><button class="btn out" data-act="txOut" data-id="${it.id}" data-write ${t ? '' : 'disabled'}>${ic('out')}출고</button><button class="btn" data-act="txMove" data-id="${it.id}" data-write ${t ? '' : 'disabled'}>${ic('move')}이동</button></div>
     </section>
-    <section class="sec tone-teal"><div class="sec-h">${hh('위치별 수량', 'pin')}${adm ? `<button class="btn sm edit" data-act="txAdjust" data-id="${it.id}" data-write>수량 정정</button>` : ''}</div>
+    <section class="sec box tone-blue"><div class="sec-h">${hh('위치별 수량', 'pin')}${adm ? `<button class="btn sm edit" data-act="txAdjust" data-id="${it.id}" data-write>수량 정정</button>` : ''}</div>
       <div class="ledger">${rows.length ? rows.map(s => `<button class="lrow" data-act="loc" data-id="${s.location_id}"><div class="main"><span class="t"><span class="tape">${esc(locCode(s.location_id))}</span></span><span class="s">${esc(locPathText(s.location_id))}</span></div><span class="qty">${s.qty}<small>${u}</small></span><span class="chev">${ic('chev')}</span></button>`).join('') : empty('pin', '재고가 없습니다.', '「입고」로 넣을 위치와 수량을 기록하세요.')}</div></section>
-    <section class="sec tone-amber"><div class="sec-h">${hh('메모', 'edit')}<button class="btn sm edit" data-act="memoEdit" data-id="${it.id}" data-write>${ic('edit')}${it.memo ? '고치기' : '적기'}</button></div>
-      ${it.memo ? `<div class="memo">${esc(it.memo)}</div>` : `<div class="muted" style="font-size:14px">대체품, 보관 요령, 주의할 점 등을 적어 두면 모두가 봅니다.</div>`}</section>
-    <section class="sec tone-blue"><div class="sec-h">${hh('입출고 기록', 'history')}<span class="aside">최근 50건</span></div>
+    <section class="sec box tone-amber"><div class="sec-h">${hh('메모', 'edit')}<button class="btn sm edit" data-act="memoEdit" data-id="${it.id}" data-write>${ic('edit')}${it.memo ? '고치기' : '적기'}</button></div>
+      <div class="pad">${it.memo ? `<div class="memo">${esc(it.memo)}</div>` : `<div class="muted" style="font-size:14px">대체품, 보관 요령, 주의할 점 등을 적어 두면 모두가 봅니다.</div>`}</div></section>
+    <section class="sec box tone-slate"><div class="sec-h">${hh('입출고 기록', 'history')}<span class="aside">최근 50건</span></div>
       <div class="ledger hist">${d.tx ? (d.tx.length ? d.tx.map(x => txRow(x)).join('') : empty('list', '아직 기록이 없습니다.')) : loadingBox()}</div></section>
     ${commentsBlock('item', it.id, d.cm)}`;
   const actions = adm ? `<button class="iconbtn" data-act="itemEdit" data-id="${it.id}" aria-label="품목 수정" data-write>${ic('edit')}</button>` : '';
@@ -2106,7 +2109,7 @@ VIEW['items.item'] = r => {
 };
 
 function commentsBlock(type, id, list) {
-  return `<section class="sec tone-violet"><div class="sec-h">${hh('댓글', 'chat')}<span class="aside">${list ? list.length + '개' : ''}</span></div>
+  return `<section class="sec box tone-blue"><div class="sec-h">${hh('댓글', 'chat')}<span class="aside">${list ? list.length + '개' : ''}</span></div>
     <div class="ledger">${list ? list.map(c => `<div class="cmt"><div class="h"><b>${esc(c.name)}</b><span class="w">${fmtWhen(c.created_at)}</span>${can(S.user, 'delComment', c) ? `<button class="linkbtn" style="margin-left:auto;font-size:12.5px;color:var(--muted)" data-act="delComment" data-id="${c.id}" data-write>지우기</button>` : ''}</div><div class="b">${esc(c.body)}</div></div>`).join('') : (online() ? '' : `<div class="cmt"><span class="muted" style="font-size:13.5px">오프라인이라 댓글을 불러오지 못했습니다.</span></div>`)}
     <form class="cmt-form" data-submit="comment" data-type="${type}" data-id="${id}"><input id="cmt-${id}" name="body" placeholder="댓글 남기기" autocomplete="off" enterkeyhint="send" aria-label="댓글"><button class="btn primary" data-write ${S.busy ? 'disabled' : ''}>등록</button></form></div></section>`;
 }
@@ -2127,13 +2130,13 @@ VIEW['docs.browse'] = r => {
     const adm = can(S.user, 'folderAdmin');
     pane = `<div class="toolbar fill"><button class="btn sm add" data-act="mkdir" data-write>${ic('folderPlus')}폴더 만들기</button>${fid ? `<button class="btn sm add" data-act="addLink" data-write>${ic('link')}영상·링크</button>` : ''}${f && adm ? `<button class="btn sm edit" data-act="folderSet" data-id="${fid}" data-write>${ic('gear')}폴더 설정</button>` : ''}</div>
       ${f && (f.auto_sort || f.notify_new) ? `<div class="notice">${ic('info')}<span>${[f.auto_sort ? '이 폴더에 올린 파일은 날짜에 맞춰 <b>연도 › 월</b> 폴더로 자동 정리됩니다.' : '', f.notify_new ? '여기에 자료를 올리면 모든 직원에게 <b>새 자료 알림</b>이 갑니다.' : ''].filter(Boolean).join(' ')}</span></div>` : ''}
-      ${kids.length ? `<section class="sec tone-amber"><div class="sec-h">${hh('폴더', 'folder')}</div><div class="ledger">${kids.map(k => { const n = (S.ix.docsIn.get(k.id) || []).length, m = (S.ix.folderKids.get(k.id) || []).length;
+      ${kids.length ? `<section class="sec box tone-amber"><div class="sec-h">${hh('폴더', 'folder')}</div><div class="ledger">${kids.map(k => { const n = (S.ix.docsIn.get(k.id) || []).length, m = (S.ix.folderKids.get(k.id) || []).length;
         return `<button class="lrow" data-act="folder" data-id="${k.id}"><span class="folder-ic">${ic('folder')}</span><div class="main"><span class="t">${esc(k.name)}</span><span class="s">${[m ? '폴더 ' + m : '', n ? '파일 ' + n : ''].filter(Boolean).join(' · ') || '비어 있음'}${k.auto_sort ? ' · 날짜별 자동 정리' : ''}${k.notify_new ? ' · 새 자료 알림' : ''}</span></div><span class="chev">${ic('chev')}</span></button>`; }).join('')}</div></section>` : (fid ? '' : `<div class="ledger">${empty('folder', '아직 폴더가 없습니다.', '「폴더 만들기」로 도면, 교육 자료 같은 폴더를 만드세요.')}</div>`)}
-      ${fid ? `<section class="sec tone-blue"><div class="sec-h">${hh('파일', 'docs')}<span class="aside">${docs.length ? docs.length + '개 · ' + (byName ? '이름 순' : '최근 올린 순') : ''}</span></div><div class="ledger">${docs.length ? docs.map(d => docRow(d)).join('') : empty('docs', '아직 파일이 없습니다.', '아래 「올리기」로 PDF·엑셀·사진 등을 그대로 올리세요.')}</div></section>` : ''}
+      ${fid ? `<section class="sec box tone-blue"><div class="sec-h">${hh('파일', 'docs')}<span class="aside">${docs.length ? docs.length + '개 · ' + (byName ? '이름 순' : '최근 올린 순') : ''}</span></div><div class="ledger">${docs.length ? docs.map(d => docRow(d)).join('') : empty('docs', '아직 파일이 없습니다.', '아래 「올리기」로 PDF·엑셀·사진 등을 그대로 올리세요.')}</div></section>` : ''}
       ${!fid ? `<p class="muted" style="font-size:12.5px;margin:0">자료는 회사용 구글 드라이브에 저장되고, 앱 폴더와 같은 모양으로 정리됩니다.</p>` : ''}`;
     if (!fid) {
       const rc = recentDocs().map(id => S.ix.doc.get(id)).filter(Boolean).slice(0, 5);
-      pane = (rc.length ? `<section class="sec tone-violet"><div class="sec-h">${hh('최근 본 자료', 'clock')}</div><div class="ledger">${rc.map(d => docRow(d, true)).join('')}</div></section>` : '') + pane;
+      pane = (rc.length ? `<section class="sec box tone-slate"><div class="sec-h">${hh('최근 본 자료', 'clock')}</div><div class="ledger">${rc.map(d => docRow(d, true)).join('')}</div></section>` : '') + pane;
     }
   }
   const cr = f && !q ? crumbs([{ label: '자료', act: 'folder', data: { id: '' } }, ...pathOf(S.ix.folder, fid).map(p => ({ label: p.name, act: 'folder', data: { id: p.id } }))]) : null;
@@ -2159,9 +2162,9 @@ VIEW['docs.mine'] = r => {
     ${all.length && isIOS() && !isStandalone() ? `<div class="notice warn">${ic('warn')}<span><b>아이폰 사파리에서 쓰는 중입니다.</b> 사파리는 7일 넘게 이 앱을 열지 않으면 폰에 저장한 자료를 지울 수 있습니다. <b>홈 화면에 앱을 추가</b>해 아이콘으로 쓰면 지워지지 않습니다.</span><button class="btn sm" data-act="install">추가 방법</button></div>` : ''}
     ${notSaved.length && online() ? `<div class="notice warn">${ic('warn')}<span>아직 폰에 없는 자료가 ${notSaved.length}개 있습니다.</span><button class="btn sm add" data-act="mySaveAll">모두 폰에 저장</button></div>` : ''}
     <div class="toolbar"><button class="btn sm add" data-act="myMkdir">${ic('folderPlus')}폴더 만들기</button>${f ? `<span class="grow"></span><button class="btn sm edit" data-act="myRename" data-id="${f.id}">${ic('edit')}이름 바꾸기</button><button class="btn sm ghost danger" data-act="myDelFolder" data-id="${f.id}">${ic('trash')}폴더 지우기</button>` : ''}</div>
-    ${kids.length ? `<section class="sec tone-amber"><div class="sec-h">${hh('내 폴더', 'folder')}</div><div class="ledger">${kids.map(k => { const n = myDocsIn(md, k.id).length, m = myKids(md, k.id).length;
+    ${kids.length ? `<section class="sec box tone-amber"><div class="sec-h">${hh('내 폴더', 'folder')}</div><div class="ledger">${kids.map(k => { const n = myDocsIn(md, k.id).length, m = myKids(md, k.id).length;
       return `<button class="lrow" data-act="myOpen" data-id="${k.id}"><span class="folder-ic mine">${ic('folder')}</span><div class="main"><span class="t">${esc(k.name)}</span><span class="s">${[m ? '폴더 ' + m : '', n ? '자료 ' + n : ''].filter(Boolean).join(' · ') || '비어 있음'}</span></div><span class="chev">${ic('chev')}</span></button>`; }).join('')}</div></section>` : ''}
-    <section class="sec tone-blue"><div class="sec-h">${hh(f ? '이 폴더의 자료' : kids.length ? '폴더에 넣지 않은 자료' : '저장한 자료', 'starOn')}<span class="aside">${docs.length ? docs.length + '개' : ''}</span></div>
+    <section class="sec box tone-blue"><div class="sec-h">${hh(f ? '이 폴더의 자료' : kids.length ? '폴더에 넣지 않은 자료' : '저장한 자료', 'starOn')}<span class="aside">${docs.length ? docs.length + '개' : ''}</span></div>
       <div class="ledger">${docs.map(d => myDocRow(d)).join('') || empty('docs', f ? '이 폴더는 비어 있습니다.' : all.length ? '모두 폴더에 들어 있습니다.' : '아직 저장한 자료가 없습니다.', f ? '자료 옆 「⋯」 › 「폴더로 옮기기」로 넣으세요.' : '')}</div></section>
     ${all.length ? `<p class="muted" style="font-size:12.5px;margin:0">폰에 저장한 파일 ${Object.keys(offList()).length}개 · ${fmtSize(offTotal())}. PDF·사진은 앱 안에서 바로 열리고, 엑셀·한글 같은 파일은 「파일 열기」로 휴대폰 앱에서 엽니다.</p>` : ''}`;
   return { title: f ? f.name : '자료', crumbs: cr, body };
@@ -2204,7 +2207,7 @@ VIEW['scan.scan'] = () => {
     ${S.scanErr && !DEMO ? `<button class="btn block" data-act="scanRetry">${ic('scan')}카메라 다시 켜기</button>` : ''}
     <p class="muted" style="margin:0;font-size:13.5px">캐비넷·선반에 붙은 QR 라벨을 네모 안에 맞추면 그 위치의 자재가 바로 열립니다.</p>
     <form class="toolbar" data-submit="codeGo"><div class="search grow">${ic('tag')}<input id="code-in" name="code" placeholder="라벨 코드 직접 입력 (예: WH-S1-상)" autocapitalize="characters" autocomplete="off" enterkeyhint="go" aria-label="라벨 코드"></div><button class="btn primary" style="min-height:50px">열기</button></form>
-    ${DEMO ? `<section class="sec"><div class="sec-h"><h2>체험판 · 라벨 골라서 스캔 흉내</h2></div><div class="ledger">${units.map(l => `<button class="lrow" data-act="loc" data-id="${l.id}"><span class="tape">${esc(l.code)}</span><div class="main"><span class="s">${esc(locPathText(l.id))}</span></div><span class="chev">${ic('chev')}</span></button>`).join('')}</div></section>` : ''}` };
+    ${DEMO ? `<section class="sec box tone-slate"><div class="sec-h">${hh('체험판 · 라벨 골라서 스캔 흉내', 'qr')}</div><div class="ledger">${units.map(l => `<button class="lrow k-${esc(l.kind)}" data-act="loc" data-id="${l.id}"><span class="ic">${ic(locKind(l)[0])}</span><div class="main"><span class="t">${esc(l.name)}</span><span class="s">${locKind(l)[1]} · ${esc(locPathText(l.id))}</span></div><span class="tape">${esc(l.code)}</span><span class="chev">${ic('chev')}</span></button>`).join('')}</div></section>` : ''}` };
 };
 
 /* ───────── 알림 ───────── */
@@ -2227,20 +2230,20 @@ VIEW['more.menu'] = () => {
       <button class="btn sm" data-act="go" data-v="me">내 정보</button></section>
     ${adm ? `<section class="sec"><div class="sec-h"><h2>관리</h2></div><div class="ledger menu">
       ${row('go" data-v="users', 'users', '직원 관리', '가입 승인 · 권한 · 비밀번호 초기화 · 퇴사자', pending ? `<span class="chip crit">승인 대기 ${pending}</span>` : '', 'blue')}
-      ${row('go" data-v="status', 'gauge', '시스템 상태', '자동 깨우기 · 백업 · 저장 용량', st ? `<span class="lamp ${lampOk ? '' : 'off'}" title="${lampOk ? '정상' : '확인 필요'}"></span>` : '', 'green')}
+      ${row('go" data-v="status', 'gauge', '시스템 상태', '자동 깨우기 · 백업 · 저장 용량', st ? `<span class="lamp ${lampOk ? '' : 'off'}" title="${lampOk ? '정상' : '확인 필요'}"></span>` : '', 'slate')}
       ${row('go" data-v="log', 'list', '활동 기록', '누가 언제 무엇을 했는지 전부', '', 'slate')}
-      ${row('go" data-v="places', 'shelf', '위치 관리 · QR 라벨', '캐비넷·선반 추가, 사진, 라벨 인쇄', '', 'teal')}
-      ${row('go" data-v="cats', 'tag', '분류 관리', '도어 부품, 전장 부품 같은 자재 분류', '', 'violet')}
-      ${row('go" data-v="bulk', 'paste', '품목 대량 등록', '엑셀에서 복사해 한 번에 넣기', '', 'orange')}
-      ${row('stats', 'gauge', '사용 통계', '많이 나간 자재 · 현장별 사용량 · 최소 재고 추천', '', 'pink')}
+      ${row('go" data-v="places', 'shelf', '위치 관리 · QR 라벨', '캐비넷·선반 추가, 사진, 라벨 인쇄', '', 'blue')}
+      ${row('go" data-v="cats', 'tag', '분류 관리', '도어 부품, 전장 부품 같은 자재 분류', '', 'blue')}
+      ${row('go" data-v="bulk', 'paste', '품목 대량 등록', '엑셀에서 복사해 한 번에 넣기', '', 'blue')}
+      ${row('stats', 'gauge', '사용 통계', '많이 나간 자재 · 현장별 사용량 · 최소 재고 추천', '', 'blue')}
       ${row('poster', 'docs', '직원 안내문 인쇄', '앱 주소 QR과 쓰는 법을 A4 한 장에', '', 'amber')}
       ${row('go" data-v="trash', 'trash', '휴지통', '지운 뒤 30일 안에 되살리기', '', 'red')}
-      ${row('go" data-v="guide', 'book', '관리자 안내', '문제가 생겼을 때 할 일', '', 'blue')}
+      ${row('go" data-v="guide', 'book', '관리자 안내', '문제가 생겼을 때 할 일', '', 'amber')}
     </div></section>` : ''}
     <section class="sec"><div class="sec-h"><h2>도움말</h2></div><div class="ledger menu">
-      ${adm ? '' : row('go" data-v="guide', 'book', '사용 안내', '입고·출고·되돌리기·자료 올리기', '', 'blue')}
-      ${row('tour', 'info', '처음 안내 다시 보기', '꺼내기 · 되돌리기 · 자료 검색 (3장)', '', 'violet')}
-      ${isStandalone() ? '' : row('install', 'phone', '홈 화면에 앱 추가', '아이콘을 눌러 바로 열기', '', 'teal')}
+      ${adm ? '' : row('go" data-v="guide', 'book', '사용 안내', '입고·출고·되돌리기·자료 올리기', '', 'amber')}
+      ${row('tour', 'info', '처음 안내 다시 보기', '꺼내기 · 되돌리기 · 자료 검색 (3장)', '', 'amber')}
+      ${isStandalone() ? '' : row('install', 'phone', '홈 화면에 앱 추가', '아이콘을 눌러 바로 열기', '', 'blue')}
     </div></section>
     <section class="sec"><div class="sec-h"><h2>화면</h2></div><div class="ledger">
       <div class="lrow"><span class="ic">${ic(themeNow() === 'dark' ? 'moon' : themeNow() === 'light' ? 'sun' : 'contrast')}</span><div class="main"><span class="t">화면 모드</span><span class="s">자동은 휴대폰의 밝게·어둡게 설정을 따릅니다. 이 기기에만 저장됩니다.</span></div></div>
@@ -2319,7 +2322,7 @@ VIEW['more.status'] = () => {
 VIEW['more.places'] = () => {
   const rows = flatTree(S.ix.locKids);
   const body = `<div class="toolbar"><button class="btn sm primary" data-act="locBulk" data-write>${ic('plus')}한 번에 만들기</button><button class="btn sm add" data-act="locNew" data-write>${ic('plus')}구역 하나 추가</button><button class="btn sm" data-act="go" data-v="labels">${ic('qr')}QR 라벨 만들기</button></div>
-    <div class="ledger">${rows.map(({ n, depth }) => `<div class="lrow" style="padding-left:${14 + depth * 20}px"><span class="ic">${ic(n.kind === 'zone' ? 'pin' : 'shelf')}</span><div class="main"><span class="t">${esc(n.name)}</span>${n.code ? `<span class="s"><span class="tape">${esc(n.code)}</span></span>` : ''}</div>
+    <div class="ledger">${rows.map(({ n, depth }) => `<div class="lrow k-${esc(n.kind || 'zone')}" style="padding-left:${14 + depth * 20}px"><span class="ic">${ic(locKind(n)[0])}</span><div class="main"><span class="t">${esc(n.name)}</span><span class="s">${locKind(n)[1]}${n.code ? ` <span class="tape">${esc(n.code)}</span>` : ''}</span></div>
       ${depth < 2 ? `<button class="btn sm add" data-act="locNew" data-parent="${n.id}" data-write aria-label="${esc(n.name)} 안에 추가">${ic('plus')}안에</button>` : ''}<button class="iconbtn" data-act="locEdit" data-id="${n.id}" data-write aria-label="수정">${ic('edit')}</button></div>`).join('')}</div>
     <p class="muted" style="font-size:12.5px;margin:0">구역(예: 창고) › 캐비넷·선반(예: 선반 3) › 칸(예: 하단) 세 단계까지 만들 수 있습니다. 코드는 라벨에 크게 찍히는 짧은 이름입니다.</p>`;
   return { title: '위치 관리', crumbs: moreCr('위치 관리'), body };
@@ -2462,8 +2465,10 @@ const stepper = (k, v) => `<div class="stepper"><button type="button" data-act="
 function locPicker(k, sel, { onlyWith, qtyOf, exclude } = {}) {
   const rows = flatTree(S.ix.locKids).filter(({ n }) => (!onlyWith || onlyWith.has(n.id)) && n.id !== exclude);
   if (!rows.length) return `<div class="notice">${ic('info')}<span>${onlyWith ? '재고가 있는 위치가 없습니다.' : '고를 수 있는 위치가 없습니다. 관리자가 더보기 › 위치 관리에서 먼저 위치를 만들어야 합니다.'}</span></div>`;
-  return `<div class="pickgrid" role="listbox">${rows.map(({ n, depth }) => `<button type="button" class="pick" data-act="pick" data-k="${k}" data-v="${n.id}" aria-pressed="${sel === n.id}" style="padding-left:${14 + (onlyWith ? 0 : depth * 16)}px">
-    <div class="main"><span>${esc(onlyWith ? locPathText(n.id) : n.name)}</span>${n.code ? `<span class="s"><span class="tape">${esc(n.code)}</span></span>` : ''}</div>${qtyOf ? `<span class="qty">${qtyOf(n.id)}</span>` : ''}</button>`).join('')}</div>`;
+  // 단계마다 모양이 다르다: 구역 = 회색 띠·굵게·핀 / 캐비넷·선반 = 선반 아이콘 / 칸 = 작게·서랍 아이콘. 라벨 코드는 오른쪽
+  return `<div class="pickgrid" role="listbox">${rows.map(({ n, depth }) => { const [icn, kn] = locKind(n), tape = n.code ? `<span class="tape">${esc(n.code)}</span>` : '';
+    return `<button type="button" class="pick lp k-${esc(n.kind || 'zone')}" data-act="pick" data-k="${k}" data-v="${n.id}" aria-pressed="${sel === n.id}" style="padding-left:${12 + (onlyWith ? 0 : depth * 18)}px">
+    <span class="lic">${ic(icn)}</span><div class="main"><span class="nm">${esc(onlyWith ? locPathText(n.id) : n.name)}</span><span class="kd">${kn}${qtyOf && tape ? ' · ' + tape : ''}</span></div>${qtyOf ? `<span class="qty">${qtyOf(n.id)}</span>` : tape}</button>`; }).join('')}</div>`;
 }
 const sheetHead = (t, sub = '') => `<div class="sheet-h"><h3 id="sheet-t">${esc(t)}</h3><button class="iconbtn" data-act="sheetClose" aria-label="닫기">${ic('x')}</button></div>${sub ? `<div class="sub">${sub}</div>` : ''}`;
 const sheetErr = () => S.sheet.err ? `<div class="notice crit" role="alert">${ic('warn')}<span>${esc(S.sheet.err)}</span></div>` : '';
