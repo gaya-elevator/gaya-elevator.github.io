@@ -10,7 +10,7 @@ const CONFIG = Object.assign({
   STORAGE_WARN: 0.8
 }, window.GAYA_CONFIG || {});
 const DEMO = !CONFIG.SUPABASE_URL;
-const APP_VER = '7f8bfcb5';
+const APP_VER = '61de2dfd';
 
 /* ───────── 작은 도구들 ───────── */
 const $ = (s, r = document) => r.querySelector(s);
@@ -57,6 +57,10 @@ function applySize(v) { if (v === 'lg') document.documentElement.setAttribute('d
 applySize(sizeNow());
 /* 휴대폰 종류·설치 상태 */
 const isIOS = () => /iPhone|iPad|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+/* 카톡·라인·네이버·밴드 같은 앱 안에서 링크를 연 경우(앱 안 브라우저): 홈 화면 추가·폰 알림이 안 되고 로그인도 따로라서 휴대폰 브라우저로 넘긴다 */
+const IN_APPS = [['카카오톡', /KAKAOTALK/i], ['라인', /\bLine\//], ['네이버', /NAVER\(inapp/i], ['밴드', /\bBAND\//i], ['인스타그램', /Instagram/i], ['페이스북', /FBAN|FBAV/], ['다음', /DaumApps/i], ['카카오스토리', /KAKAOSTORY/i]];
+const inAppName = () => { const ua = navigator.userAgent || ''; const f = IN_APPS.find(([, re]) => re.test(ua)); return f ? f[0] : ''; };
+const isAndroid = () => /Android/i.test(navigator.userAgent || '');
 const isStandalone = () => (window.matchMedia && matchMedia('(display-mode: standalone)').matches) || navigator.standalone === true;
 /* 파일 내려받기 (엑셀에서 바로 열리는 CSV: 한글이 깨지지 않게 BOM 을 붙인다) */
 // 글자 칸이 = + - @ 로 시작하면 엑셀이 수식으로 실행하므로 앞에 ' 를 붙여 글자로 둔다 (숫자는 그대로)
@@ -1798,7 +1802,7 @@ function authView() {
   const down = S.serverDown ? `<div class="notice warn" role="alert">${ic('warn')}<span>서버에 연결되지 않습니다. 잠시 뒤 다시 시도하고, 계속 안 되면 관리자에게 알려 주세요. (관리자 안내 › 빨간 불이 켜졌을 때)</span></div>` : '';
   const off = online() ? '' : `<div class="notice crit" role="alert">${ic('wifioff')}<span>인터넷에 연결되어 있지 않습니다. 연결된 뒤 로그인하세요.</span></div>`;
   const err = S.authErr ? `<div class="notice crit" role="alert">${ic('warn')}<span>${esc(S.authErr)}</span></div>` : '';
-  if (S.authView === 'signup') return `<div class="auth-wrap">${hero()}<div class="auth">
+  if (S.authView === 'signup') return `<div class="auth-wrap">${hero()}<div class="auth">${preInstall()}
     <form class="card" data-submit="signup" autocomplete="off">
       <h2>가입 신청</h2>
       <div class="field"><label for="su-emp">사내번호</label><input id="su-emp" name="emp" inputmode="text" autocapitalize="off" required placeholder="예: 1023"><span class="hint">로그인할 때 아이디로 씁니다.</span></div>
@@ -1811,7 +1815,7 @@ function authView() {
       <p style="margin:0;font-size:13px" class="muted">메일 인증은 없습니다. 관리자가 이름과 사내번호를 확인하고 승인합니다.</p>
     </form>
     <p style="text-align:center;margin:0">이미 가입했다면 <button class="linkbtn" data-act="authView" data-v="login">로그인</button></p></div></div>`;
-  return `<div class="auth-wrap">${hero()}<div class="auth">
+  return `<div class="auth-wrap">${hero()}<div class="auth">${preInstall()}
     <form class="card" data-submit="login">
       ${down}
       <div class="field"><label for="li-emp">사내번호</label><input id="li-emp" name="emp" autocapitalize="off" autocomplete="username" required placeholder="예: 1023"></div>
@@ -1891,6 +1895,31 @@ function myItems(tx) {
   return [...score.entries()].sort((a, b) => b[1].n - a[1].n || a[1].first - b[1].first).slice(0, 6).map(([id]) => S.ix.item.get(id));
 }
 /* 홈 화면에 앱 설치 안내 (설치했거나 「다음에」를 누르면 2주 동안 숨김) */
+/* 로그인 전 첫 화면: 먼저 홈 화면에 추가하게 안내 (아이폰은 사파리와 홈 화면 앱의 로그인이 따로라, 먼저 추가하고 아이콘으로 열어 가입하는 게 한 번에 끝난다) */
+function preInstall() {
+  if (isStandalone() || !pref('install') || (DEMO && !window.__installCard)) return '';
+  const later = `<button type="button" class="linkbtn pi-later" data-act="installLater">다음에</button>`;
+  if (isIOS()) return `<div class="card prein"><div class="pi-h">${ic('phone')}<b>먼저 홈 화면에 추가하세요</b>${later}</div>
+    <ol class="pi-steps"><li>화면 아래 가운데 <b>공유</b> 버튼 <span class="pi-ic">${ic('iosShare')}</span></li><li>목록에서 <b>「홈 화면에 추가」</b> → 오른쪽 위 <b>「추가」</b></li><li>홈 화면에 생긴 <b>GAYA Hub</b> 아이콘으로 열어 가입·로그인</li></ol>
+    <p class="muted pi-note">아이폰은 사파리에서 로그인해도 아이콘으로 열면 다시 로그인해야 해서, 먼저 추가하는 게 편합니다.</p></div>`;
+  if (S.installEvt) return `<div class="card prein"><div class="pi-h">${ic('phone')}<b>앱으로 설치하면 더 편합니다</b>${later}</div>
+    <p class="muted pi-note">한 번 누르면 홈 화면에 GAYA Hub 아이콘이 생깁니다. 로그인은 그대로 이어집니다.</p><button type="button" class="btn primary block" data-act="install">${ic('download')}앱 설치</button></div>`;
+  if (isAndroid()) return `<div class="card prein"><div class="pi-h">${ic('phone')}<b>홈 화면에 추가하면 더 편합니다</b>${later}</div>
+    <p class="muted pi-note">브라우저 메뉴(크롬은 오른쪽 위 <b>⋮</b>, 삼성 인터넷은 아래 <b>≡</b>) → <b>「앱 설치」</b> 또는 <b>「홈 화면에 추가」</b></p></div>`;
+  return '';
+}
+/* 앱 안 브라우저(카톡 등)에서 열렸을 때 첫 화면 */
+function inAppView(name) {
+  const kakao = name === '카카오톡';
+  return `<div class="auth-wrap">${authHero()}<div class="auth"><div class="card inapp">
+    <h2>휴대폰 브라우저에서 열어 주세요</h2>
+    <p class="muted" style="margin:0">지금은 <b>${esc(name)}</b> 앱 안에서 열려 있습니다. 여기서는 홈 화면 추가와 폰 알림이 안 되고, 로그인도 따로 해야 합니다.</p>
+    ${kakao ? `<div class="notice">${ic('info')}<span>${isIOS() ? '사파리로' : '크롬으로'} 저절로 넘어가는 중입니다. 안 넘어가면 아래 단추를 누르세요.</span></div>` : ''}
+    ${kakao || isAndroid() ? `<button class="btn primary block big" data-act="inAppOpen">${ic('share')}${isIOS() ? '사파리로' : '크롬으로'} 열기</button>` : ''}
+    <div class="ia-how"><b>단추가 안 되면</b>${isIOS() ? `<p>화면 오른쪽 아래 <b>⋯</b> 또는 <b>공유</b> 버튼 → <b>「Safari로 열기」</b></p>` : `<p>화면 오른쪽 위 <b>⋮</b> 메뉴 → <b>「다른 브라우저로 열기」</b></p>`}</div>
+    <button class="btn block" data-act="copyAppUrl">${ic('link')}주소 복사</button>
+    <p style="text-align:center;margin:0"><button class="linkbtn" data-act="inAppStay">그래도 여기서 쓰기</button></p></div></div></div>`;
+}
 function installPromo() {
   if (isStandalone() || !pref('install')) return '';
   if (!S.installEvt && !isIOS() && !DEMO) return '';
@@ -2457,8 +2486,8 @@ function posterHtml(url, admins) {
   return `<div class="ps-head">${logo('logo')}<div><div class="ps-brand">(주)가야엘리베이터</div><div class="ps-title">GAYA Hub 사용 안내</div><div class="ps-sub">자재 입출고 · 기술 자료 앱</div></div></div>
     <div class="ps-qr">${qrSvg(url)}<div><b>휴대폰 카메라로 QR을 찍으세요</b><span class="ps-url">${esc(url)}</span><a class="ps-btn" href="${esc(url)}" target="_blank" rel="noopener">휴대폰으로 보고 있다면 여기를 누르세요 ›</a><span>아이폰은 사파리, 안드로이드는 크롬에서 열립니다</span></div></div>
     <ol class="ps-steps">
-      ${st(1, '가입 신청', '첫 화면 「가입 신청」에서 사내번호·이름·비밀번호를 적습니다. 관리자가 승인하면 바로 씁니다.')}
-      ${st(2, '홈 화면에 추가', '아이폰: 아래 공유 버튼 → 「홈 화면에 추가」<br>안드로이드: ⋮ 메뉴 → 「홈 화면에 추가」 또는 「앱 설치」')}
+      ${st(1, '먼저 홈 화면에 추가', '안드로이드: 첫 화면 「앱 설치」 한 번 (또는 ⋮ 메뉴 → 「앱 설치」)<br>아이폰: 아래 공유 버튼 → 「홈 화면에 추가」 → 「추가」')}
+      ${st(2, '아이콘으로 열어 가입 신청', '홈 화면의 GAYA Hub 아이콘 → 「가입 신청」에 사내번호·이름·비밀번호. 관리자가 승인하면 바로 씁니다.')}
       ${st(3, '자재 꺼내기', '가운데 「스캔」으로 선반 QR을 찍고, 쓸 자재 옆 「꺼내기」 → 수량·현장(동·호기) → 출고')}
       ${st(4, '여러 개를 꺼낼 때', '「담기」로 모은 뒤 「한 번에 출고」. 현장은 한 번만 적으면 됩니다.')}
       ${st(5, '잘못 눌렀으면', '저장 직후 뜨는 「되돌리기」. 꺼냈다가 안 쓴 자재는 기록의 「출고 취소 (안 씀)」')}
@@ -3184,6 +3213,17 @@ Object.assign(ACT, {
     try { ev.prompt(); await ev.userChoice; } catch { openSheet('install'); }
     render();
   },
+  inAppOpen: d => { // 카톡: 카카오가 열어 둔 「바깥 브라우저로 열기」 주소, 라인: openExternalBrowser=1, 그 밖의 안드로이드: 크롬으로 여는 intent 주소
+    const url = location.href, ua = navigator.userAgent || '';
+    let to = '';
+    if (/KAKAOTALK/i.test(ua)) to = 'kakaotalk://web/openExternal?url=' + encodeURIComponent(url);
+    else if (/\bLine\//.test(ua)) to = /openExternalBrowser=1/.test(url) ? '' : url + (url.includes('?') ? '&' : '?') + 'openExternalBrowser=1';
+    else if (isAndroid()) to = 'intent://' + url.replace(/^https?:\/\//, '') + '#Intent;scheme=https;package=com.android.chrome;end';
+    S.extTried = to; if (!to) { if (!d || !d.auto) toast('화면 안내대로 메뉴에서 브라우저로 열어 주세요', true); return; }
+    try { location.href = to; } catch {}
+  },
+  inAppStay: () => { try { sessionStorage.setItem('gaya-inapp-ok', '1'); } catch {} location.reload(); },
+  copyAppUrl: async () => { const url = CONFIG.APP_URL || (location.origin + location.pathname); try { await navigator.clipboard.writeText(url); toast('주소를 복사했습니다. 크롬(아이폰은 사파리) 주소창에 붙여 넣으세요'); } catch { toast(url); } },
   installLater: () => { setPref('install', false); render(); note('홈 화면 추가는 언제든 더보기 › 도움말 › 「홈 화면에 앱 추가」에서 할 수 있습니다.'); },
   pref: (d, el) => { setPref(d.k, el.checked); setTimeout(render, 0); },
   pickSite: d => { const s = S.sheet; if (!s) return; const p = parseSite(d.v); Object.assign(s.d, { site: p.name, dong: p.dong, ho: p.ho }); render(); },
@@ -3192,7 +3232,7 @@ Object.assign(ACT, {
   tourNext: () => { const s = S.sheet; if (!s) return; if (s.d.step >= TOUR.length - 1) { S.sheet = null; render(); return; } s.d.step++; render(); }
 });
 /* 안드로이드 크롬: 「앱 설치」 창을 우리 버튼으로 띄우기 위해 잡아 둔다 */
-window.addEventListener('beforeinstallprompt', e => { e.preventDefault(); S.installEvt = e; if (S.user && !S.sheet) render(); });
+window.addEventListener('beforeinstallprompt', e => { e.preventDefault(); S.installEvt = e; if (!S.sheet && !isTyping()) render(); }); // 로그인 전 첫 화면에도 「앱 설치」 단추가 바로 뜨게
 window.addEventListener('appinstalled', () => { S.installEvt = null; if (S.user) { render(); toast('홈 화면에 추가했습니다. 다음부터는 아이콘으로 여세요.'); } });
 
 /* ───────── 업데이트 5 ───────── */
@@ -3516,7 +3556,7 @@ Object.assign(ACT, {
   },
   poster: () => nav({ tab: 'more', view: 'poster' }),
   shareApp: () => { const url = CONFIG.APP_URL || (DEMO ? 'https://gaya-elevator.github.io/' : location.origin + location.pathname);
-    shareOut('앱 주소 보내기', `[가야엘리베이터] GAYA Hub (자재·자료 앱)\n아래 주소를 누르면 열립니다.\n${url}\n① 「가입 신청」에서 사내번호·이름·비밀번호를 적고, 관리자가 승인하면 바로 씁니다.\n② 홈 화면에 추가해 두면 앱처럼 아이콘으로 열립니다.`); },
+    shareOut('앱 주소 보내기', `[가야엘리베이터] GAYA Hub (자재·자료 앱)\n아래 주소를 누르면 열립니다.\n${url}\n① 주소를 누르면 크롬(아이폰은 사파리)으로 열립니다. 먼저 홈 화면에 추가하세요 — 안드로이드: 「앱 설치」 한 번, 아이폰: 아래 공유 버튼 → 「홈 화면에 추가」\n② 홈 화면의 GAYA Hub 아이콘으로 열어 「가입 신청」(사내번호·이름·비밀번호). 관리자가 승인하면 바로 씁니다.`); },
   printPoster: () => { if (DEMO) return note('체험판 화면에서는 인쇄 창이 열리지 않습니다. 실제 앱에서는 바로 인쇄되고, 인쇄 창에서 「PDF로 저장」도 됩니다.'); printPosterNow(); }
 });
 Object.assign(CONFIRM, {
@@ -3757,6 +3797,9 @@ function ensureDom() {
 }
 async function boot() {
   ensureDom();
+  const ia = inAppName(); // 카톡 등 앱 안에서 열렸으면 휴대폰 브라우저로 넘긴다 (주소의 ?loc= 그대로)
+  let iaOk = false; try { iaOk = sessionStorage.getItem('gaya-inapp-ok') === '1'; } catch {}
+  if (ia && !iaOk) { $('#app').innerHTML = inAppView(ia); if (ia === '카카오톡' || ia === '라인') setTimeout(() => ACT.inAppOpen({ auto: 1 }), 60); return; }
   S.deepCode = takeDeepCode(); S.deepGo = takeDeepGo();
   try { history.replaceState({ gayaBase: 1 }, '', location.pathname + location.hash); } catch {}
   if (window.GAYA_SITE && !window.GAYA_CONFIG) { // 실제 앱인데 설정 파일(config.js)을 못 받은 경우: 체험판으로 바뀌지 않게 멈추고 안내한다

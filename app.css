@@ -628,4 +628,16 @@ label.crow{cursor:pointer}
 .thumb.none svg{width:20px;height:20px;opacity:.45}
 .cartlist .crow > .iconbtn{margin-left:6px}
 
+/* 로그인 전 「먼저 홈 화면에 추가」 안내 · 카톡 등 앱 안 브라우저 안내 */
+.prein{gap:8px;border:1px solid color-mix(in srgb,var(--accent) 30%,var(--line));background:color-mix(in srgb,var(--accent-soft) 55%,var(--surface))}
+.pi-h{display:flex;align-items:center;gap:8px;font-size:15px}
+.pi-h svg{width:20px;height:20px;color:var(--accent);flex:none}
+.pi-h .pi-later{margin-left:auto;font-size:12.5px;color:var(--muted)}
+.pi-steps{margin:0;padding-left:20px;display:flex;flex-direction:column;gap:4px;font-size:14px}
+.pi-ic svg{width:17px;height:17px;vertical-align:-3px;color:var(--accent)}
+.pi-note{margin:0;font-size:12.5px}
+.inapp{gap:12px}
+.ia-how{background:var(--sunk);border-radius:var(--r-sm);padding:10px 12px;font-size:14px}
+.ia-how p{margin:4px 0 0}
+
 @media print{body *{visibility:hidden}#labels,#labels *{visibility:visible}#labels{position:absolute;left:0;top:0;width:100%;grid-template-columns:repeat(4,1fr)}.qrlabel{break-inside:avoid}body.print-poster{background:#fff!important}body.print-poster>*:not(#printbox){display:none!important}body.print-poster #printbox{display:block!important;page:poster}body.print-poster #printbox,body.print-poster #printbox *{visibility:visible}#printbox .posterwrap{width:180mm;margin:0 auto;box-shadow:none;border-radius:0}#printbox .poster{--u:1.8mm;-webkit-print-color-adjust:exact;print-color-adjust:exact}}#printbox{display:none}@page poster{size:A4;margin:0}@media print{.noprint{display:none!important}}
